@@ -30,6 +30,7 @@ import {
   formatMinutesToDuration,
   getIntervalDuration,
   isIntervalActiveAtTime,
+  computeEmployeeWorkMinutes,
 } from "./data/mockData";
 import { Employee, AttendanceLog, CameraDetection, AttendanceInterval } from "./types";
 import { getEmployeeMetrics } from "./utils/employeeHelpers";
@@ -422,20 +423,28 @@ export default function App() {
 
         const rawTimeStr = evt.timestamp || evt.created_at || evt.event_time || new Date().toISOString();
         let timeFormatted = "12:00:00";
+        let cairoDate = dateFrom; // fallback to period start
         try {
           const parsedDate = new Date(rawTimeStr);
           if (!isNaN(parsedDate.getTime())) {
-            // Force the output to Egypt Cairo Time (EET/EEST)
-            const formatter = new Intl.DateTimeFormat("en-GB", {
+            // Extract Cairo time (HH:MM:SS)
+            const timeFormatter = new Intl.DateTimeFormat("en-GB", {
               timeZone: "Africa/Cairo",
               hour: "2-digit",
               minute: "2-digit",
               second: "2-digit",
               hour12: false
             });
-            timeFormatted = formatter.format(parsedDate);
+            timeFormatted = timeFormatter.format(parsedDate);
+            // Extract Cairo date (YYYY-MM-DD) — critical for night-shift cross-day accuracy
+            const dateFormatter = new Intl.DateTimeFormat("en-CA", {
+              timeZone: "Africa/Cairo",
+              year: "numeric",
+              month: "2-digit",
+              day: "2-digit"
+            });
+            cairoDate = dateFormatter.format(parsedDate);
           } else {
-            // Check if string already has time inside it
             const match = rawTimeStr.match(/(\d{2}):(\d{2})/);
             if (match) timeFormatted = `${match[1]}:${match[2]}:00`;
           }
@@ -450,6 +459,7 @@ export default function App() {
         newDetections.push({
           id: evt.id ? String(evt.id) : `DET-${Math.random()}`,
           timestamp: timeFormatted,
+          date: cairoDate,
           employeeId: emp.id,
           employeeName: emp.name,
           direction,
@@ -462,7 +472,9 @@ export default function App() {
       setEmployees(newEmployees);
       setDetections(newDetections);
 
-      // Group detections by employee for building intervals
+      // ─── Group detections by employee using ABSOLUTE MINUTES ──────────────
+      // Absolute minutes = (dayOffset from dateFrom) * 1440 + minutesInDay
+      // This correctly handles cross-day night shifts without special-case logic.
       const employeeDetectionsMap: { [empId: string]: CameraDetection[] } = {};
       newDetections.forEach(det => {
         if (!employeeDetectionsMap[det.employeeId]) {
@@ -473,83 +485,125 @@ export default function App() {
 
       const newLogs: AttendanceLog[] = [];
 
-      Object.entries(employeeDetectionsMap).forEach(([empId, dets]) => {
-        const sortedDets = [...dets].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-        const intervals: AttendanceInterval[] = [];
+      // Date-arithmetic helpers
+      const _getDayOffset = (base: string, target: string): number => {
+        try {
+          const b = new Date(base + "T00:00:00Z");
+          const t = new Date(target + "T00:00:00Z");
+          return Math.max(0, Math.round((t.getTime() - b.getTime()) / 86400000));
+        } catch { return 0; }
+      };
+      const _addDays = (dateStr: string, days: number): string => {
+        try {
+          const d = new Date(dateStr + "T00:00:00Z");
+          d.setUTCDate(d.getUTCDate() + days);
+          return d.toISOString().substring(0, 10);
+        } catch { return dateStr; }
+      };
+      const _minsToHHMM = (m: number) =>
+        `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 
-        // Build robust, non-overlapping intervals
-        const rawIntervals: { enter: number; exit: number | null }[] = [];
+      Object.entries(employeeDetectionsMap).forEach(([empId, dets]) => {
+        // Sort detections chronologically using absolute minutes across the full date range
+        const sortedDets = [...dets].sort((a, b) => {
+          const aAbs = _getDayOffset(dateFrom, a.date || dateFrom) * 1440 + timeToMinutes(a.timestamp);
+          const bAbs = _getDayOffset(dateFrom, b.date || dateFrom) * 1440 + timeToMinutes(b.timestamp);
+          return aAbs - bAbs;
+        });
+
+        // Build non-overlapping intervals using absolute minute arithmetic
+        const rawIntervals: { enterAbs: number; exitAbs: number | null }[] = [];
 
         sortedDets.forEach(det => {
-          const detM = timeToMinutes(det.timestamp);
+          const dayOff = _getDayOffset(dateFrom, det.date || dateFrom);
+          const detAbsMins = dayOff * 1440 + timeToMinutes(det.timestamp);
+
           if (det.direction === "In") {
-            const active = rawIntervals.find(i => i.exit === null);
+            const active = rawIntervals.find(i => i.exitAbs === null);
             if (active) {
-              // If already active but the new In is > 3 hours later, close current & start new
-              if (detM - active.enter > 180) {
-                active.exit = active.enter + 45;
-                rawIntervals.push({ enter: detM, exit: null });
+              // If new "In" arrives > 3h after current open entry, auto-close and open new
+              if (detAbsMins - active.enterAbs > 180) {
+                active.exitAbs = active.enterAbs + 45;
+                rawIntervals.push({ enterAbs: detAbsMins, exitAbs: null });
               }
-              // Otherwise, ignore redundant In triggers while already inside
+              // else: ignore redundant In while already inside
             } else {
               const lastClosed = rawIntervals.length > 0 ? rawIntervals[rawIntervals.length - 1] : null;
-              if (lastClosed && lastClosed.exit !== null && detM < lastClosed.exit) {
-                const enterTime = Math.max(detM, lastClosed.exit);
-                rawIntervals.push({ enter: enterTime, exit: null });
+              if (lastClosed && lastClosed.exitAbs !== null && detAbsMins < lastClosed.exitAbs) {
+                rawIntervals.push({ enterAbs: Math.max(detAbsMins, lastClosed.exitAbs), exitAbs: null });
               } else {
-                rawIntervals.push({ enter: detM, exit: null });
+                rawIntervals.push({ enterAbs: detAbsMins, exitAbs: null });
               }
             }
           } else {
             // Out event
-            const active = rawIntervals.find(i => i.exit === null);
+            const active = rawIntervals.find(i => i.exitAbs === null);
             if (active) {
-              active.exit = Math.max(active.enter, detM);
+              active.exitAbs = Math.max(active.enterAbs, detAbsMins);
             } else {
+              // Orphan exit (missed the entry) — create a 60-min retrospective block
               const lastClosed = rawIntervals.length > 0 ? rawIntervals[rawIntervals.length - 1] : null;
-              let enterTime = Math.max(0, detM - 60);
-              if (lastClosed && lastClosed.exit !== null && enterTime < lastClosed.exit) {
-                enterTime = lastClosed.exit;
+              let enterAbs = Math.max(0, detAbsMins - 60);
+              if (lastClosed && lastClosed.exitAbs !== null && enterAbs < lastClosed.exitAbs) {
+                enterAbs = lastClosed.exitAbs;
               }
-              enterTime = Math.min(enterTime, detM);
-              rawIntervals.push({ enter: enterTime, exit: detM });
+              enterAbs = Math.min(enterAbs, detAbsMins);
+              rawIntervals.push({ enterAbs, exitAbs: detAbsMins });
             }
           }
         });
 
-        // Convert rawIntervals to formal AttendanceInterval objects
+        // Convert absolute-minute intervals to per-date AttendanceInterval objects
+        const logsByDate: { [date: string]: AttendanceInterval[] } = {};
+
         rawIntervals.forEach(ri => {
-          const enterStr = `${String(Math.floor(ri.enter / 60)).padStart(2, "0")}:${String(ri.enter % 60).padStart(2, "0")}`;
-          if (ri.exit === null) {
-            const currentSimM = timeToMinutes(simulatedTime);
-            const diff = Math.max(0, currentSimM - ri.enter);
-            intervals.push({
+          const enterDayOff = Math.floor(ri.enterAbs / 1440);
+          const enterMinsInDay = ri.enterAbs % 1440;
+          const enterDate = _addDays(dateFrom, enterDayOff);
+          const enterStr = _minsToHHMM(enterMinsInDay);
+
+          if (!logsByDate[enterDate]) logsByDate[enterDate] = [];
+
+          if (ri.exitAbs === null) {
+            logsByDate[enterDate].push({
               id: `INT-${Math.random()}`,
               enterTime: enterStr,
+              enterDate,
               exitTime: null,
-              durationMinutes: diff
+              durationMinutes: 0
             });
           } else {
-            const diff = Math.max(0, ri.exit - ri.enter);
-            const exitStr = `${String(Math.floor(ri.exit / 60)).padStart(2, "0")}:${String(ri.exit % 60).padStart(2, "0")}`;
-            intervals.push({
+            const exitDayOff = Math.floor(ri.exitAbs / 1440);
+            const exitMinsInDay = ri.exitAbs % 1440;
+            const exitDate = _addDays(dateFrom, exitDayOff);
+            const exitStr = _minsToHHMM(exitMinsInDay);
+            const crossesMidnight = exitDayOff !== enterDayOff;
+            const diff = Math.max(0, ri.exitAbs - ri.enterAbs);
+
+            logsByDate[enterDate].push({
               id: `INT-${Math.random()}`,
               enterTime: enterStr,
+              enterDate,
               exitTime: exitStr,
+              exitDate: crossesMidnight ? exitDate : undefined,
+              crossesMidnight: crossesMidnight || undefined,
               durationMinutes: diff
             });
           }
         });
 
-        if (intervals.length > 0) {
-          newLogs.push({
-            id: `LOG-${Math.random()}`,
-            employeeId: empId,
-            locationId: selectedLocationId,
-            date: dateFrom,
-            intervals
-          });
-        }
+        // One AttendanceLog per (employee × date)
+        Object.entries(logsByDate).forEach(([date, intervals]) => {
+          if (intervals.length > 0) {
+            newLogs.push({
+              id: `LOG-${Math.random()}`,
+              employeeId: empId,
+              locationId: selectedLocationId,
+              date,
+              intervals
+            });
+          }
+        });
       });
 
       if (newLogs.length > 0) {
@@ -1095,6 +1149,9 @@ export default function App() {
             simulatedTime={simulatedTime}
             fteHoursStandard={fteHoursBaseline}
             selectedDate={apiDateFrom}
+            dateFrom={apiDateFrom}
+            dateTo={apiDateTo}
+            todayDate={getCairoTodayDate()}
             onClose={() => {
               setSelectedStaffId(null);
               try {
@@ -1230,6 +1287,9 @@ export default function App() {
           simulatedTime={simulatedTime}
           fteHoursStandard={fteHoursBaseline}
           selectedDate={apiDateFrom}
+          dateFrom={apiDateFrom}
+          dateTo={apiDateTo}
+          todayDate={getCairoTodayDate()}
           allEmployees={employees}
           allLogs={logs}
         />
@@ -1367,6 +1427,9 @@ export default function App() {
           onAddInterval={handleAddManualInterval}
           onDeleteInterval={handleDeleteInterval}
           selectedDate={apiDateFrom}
+          dateFrom={apiDateFrom}
+          dateTo={apiDateTo}
+          todayDate={getCairoTodayDate()}
           onViewStaffDetails={setSelectedStaffId}
         />
 

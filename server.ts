@@ -18,73 +18,87 @@ async function startServer() {
   app.use(express.json());
 
   // Proxy endpoint to retrieve events from AIPix API securely
+  // Fetches ALL pages so the full day's data (morning through night) is returned.
   app.get("/api/aipix/events", async (req, res) => {
     try {
-      const { from, to, dir = "desc", similarity_form = "80" } = req.query;
+      const { from, to, similarity_form = "80" } = req.query;
 
-      // Extract details from query params
-      const fromDate = typeof from === "string" ? from : "2026-07-02";
-      const toDate = typeof to === "string" ? to : "2026-07-02";
+      const fromDate = typeof from === "string" ? from : "2026-07-05";
+      const toDate   = typeof to   === "string" ? to   : "2026-07-05";
 
-      // Helper to convert date strings to Y-m-dTH:i:sZ (required ISO format with Z timezone)
+      // Helper: ensure ISO datetime string ends with Z
       const formatToAIPixDate = (dateStr: string, timeSuffix: string) => {
-        // If it already contains T and ends with Z, return as is
-        if (dateStr.includes("T") && dateStr.endsWith("Z")) {
-          return dateStr;
-        }
-
-        // If it includes T but has an offset like +00:00, replace the offset with Z
-        if (dateStr.includes("T")) {
-          return dateStr.replace(/[-+]\d{2}:\d{2}$/, "Z").replace(/\+\d{4}$/, "Z");
-        }
-
-        // Ensure format: YYYY-MM-DD
-        const match = dateStr.match(/^\d{4}-\d{2}-\d{2}$/);
-        if (match) {
-          return `${dateStr}T${timeSuffix}Z`;
-        }
+        if (dateStr.includes("T") && dateStr.endsWith("Z")) return dateStr;
+        if (dateStr.includes("T")) return dateStr.replace(/[-+]\d{2}:\d{2}$/, "Z").replace(/\+\d{4}$/, "Z");
+        if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return `${dateStr}T${timeSuffix}Z`;
         return dateStr;
       };
 
       const fromFormatted = formatToAIPixDate(fromDate, "00:00:00");
-      const toFormatted = formatToAIPixDate(toDate, "23:59:59");
+      const toFormatted   = formatToAIPixDate(toDate,   "23:59:59");
 
-      const targetUrl = new URL("https://aipix.gsd-me.com/api/v1/analytic-case/events");
-      targetUrl.searchParams.append("from", fromFormatted);
-      targetUrl.searchParams.append("to", toFormatted);
-      targetUrl.searchParams.append("dir", typeof dir === "string" ? dir : "desc");
-      targetUrl.searchParams.append("similarity_form", typeof similarity_form === "string" ? similarity_form : "80");
-
-      const token = process.env.AIPIX_BEARER_TOKEN || 
+      const token = process.env.AIPIX_BEARER_TOKEN ||
         "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiNGE1MGVmMGI5NGMwMDBlNjg3OTNjYmJiMTY0MGIxOWNmOTFkZTg4M2E5YmE4MTNmNzA3NjZlYjU1YTk5ZjBmNGRjYTAxYTcwNGNhODE0MzQiLCJpYXQiOjE3ODMwMTIyODkuNzA2MDk1LCJuYmYiOjE3ODMwMTIyODkuNzA2MTAyLCJleHAiOjE3ODU2OTA2ODYuMDEwNDkxLCJzdWIiOiI2Iiwic2NvcGVzIjpbXX0.SPHNy1sKRIglEqLEQ17ZKJCeYbtsfitmhPaBZuunMxRiJeY9cpqc5aaPAY4ea-6Kigb3mP8sZnD_M3A9URQ9kiNgbtQc6qhivq5bjpjOCMFeHU6qKvQwWZ-16WGC1omeUQysi8eqywQnHfEQ1uShkSqXT96lraSv53d4FAKxKYHqMx22TaWQVKGQvmQnBhgnMykZlKw0dYUz8A8VE2FjByFEA1IfbRwwwAUJHs2fXxlX98ra0-HIlyZ0DLu51aEVHK4noEZnGYKsY0YZvqxDFJ-_g2oBR_cd5yANI0Z2LBEKbysre-UIWrLyRUwzgeEF_-PDA32glDNIzLfoBTqBhWmLvsFSythPNXtOqzKbkRLtaPj0b4g2yPDYQtNoRZMn6e_RpYGNN_EWcCrnZNFMc7hCCROCVU6m12eObRRpEkagwWAfIdZ8UrgUB3eIlcP0I9Ri9WK-GGDOoid1kuGZ1STBZj_vcvWMxSR1PdUSjYyOQxKKHyMeCzGUA2xUh-QO8d8jsE0_3zWt2xFLInxtxR_tp3MF2VJ38ub2N_R31nt3OiFobsEV7_o9ZiLLFrTODe1Y8AEkKuExGUTOVu2Rt2IIUeN38HsxVOEkC3qIuLFx35Kur3AwkJfUpUGg-KY9nKSKnn5VwS41G1TMHsn3CDm7TtPQPHWdbxJw8BROLxVI";
 
-      console.log(`[AIPix Proxy] Fetching events from: ${targetUrl.toString()}`);
+      // ── Paginated fetch: collect ALL events for the date range ─────────────
+      // Use dir=asc so we get morning events first; loop until an empty page.
+      const PER_PAGE   = 100;
+      const MAX_PAGES  = 50; // safety cap = 5 000 events max
+      const allEvents: any[] = [];
+      let page = 1;
 
-      const response = await fetch(targetUrl.toString(), {
-        method: "GET",
-        headers: {
-          "Accept": "application/json",
-          "Authorization": `Bearer ${token}`
-        }
-      });
+      console.log(`[AIPix Proxy] Starting paginated fetch: ${fromFormatted} → ${toFormatted}`);
 
-      const responseData = await response.json();
+      while (page <= MAX_PAGES) {
+        const pageUrl = new URL("https://aipix.gsd-me.com/api/v1/analytic-case/events");
+        pageUrl.searchParams.append("from", fromFormatted);
+        pageUrl.searchParams.append("to",   toFormatted);
+        pageUrl.searchParams.append("dir",  "asc");          // oldest → newest
+        pageUrl.searchParams.append("per_page", String(PER_PAGE));
+        pageUrl.searchParams.append("page",     String(page));
+        pageUrl.searchParams.append("similarity_form", typeof similarity_form === "string" ? similarity_form : "80");
 
-      if (!response.ok) {
-        console.error(`[AIPix Proxy] API returned error ${response.status}:`, responseData);
-        return res.status(response.status).json({
-          success: false,
-          status: response.status,
-          message: responseData.message || "Error fetching events from AIPix API",
-          data: responseData
+        const pageRes = await fetch(pageUrl.toString(), {
+          method: "GET",
+          headers: {
+            "Accept": "application/json",
+            "Authorization": `Bearer ${token}`
+          }
         });
+
+        if (!pageRes.ok) {
+          console.error(`[AIPix Proxy] Page ${page} returned HTTP ${pageRes.status}`);
+          break;
+        }
+
+        const pageData = await pageRes.json();
+        // Support both { data: [...] } and { data: { data: [...] } } response shapes
+        const pageEvents: any[] = Array.isArray(pageData.data)
+          ? pageData.data
+          : (Array.isArray(pageData.data?.data) ? pageData.data.data : []);
+
+        if (pageEvents.length === 0) {
+          console.log(`[AIPix Proxy] Page ${page} empty — all events fetched.`);
+          break;
+        }
+
+        allEvents.push(...pageEvents);
+        console.log(`[AIPix Proxy] Page ${page}: +${pageEvents.length} events (total so far: ${allEvents.length})`);
+
+        if (pageEvents.length < PER_PAGE) {
+          // Last partial page — no more data
+          break;
+        }
+        page++;
       }
 
-      console.log(`[AIPix Proxy] Successfully fetched events. Count: ${Array.isArray(responseData.data) ? responseData.data.length : (responseData.data ? 'object' : 'unknown')}`);
+      console.log(`[AIPix Proxy] Fetched ${allEvents.length} total events across ${page} page(s).`);
+
       return res.json({
         success: true,
-        data: responseData
+        data: { data: allEvents, total: allEvents.length }
       });
+
     } catch (error: any) {
       console.error("[AIPix Proxy] Exception during fetch proxy:", error);
       return res.status(500).json({
@@ -93,6 +107,7 @@ async function startServer() {
       });
     }
   });
+
 
   // Proxy endpoint to retrieve all registered employees from AIPix API securely
   app.get("/api/aipix/employees", async (req, res) => {

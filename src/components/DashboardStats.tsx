@@ -6,7 +6,7 @@
 import React from "react";
 import { Users, Clock, Building, TrendingUp, TrendingDown, ShieldAlert } from "lucide-react";
 import { Employee, AttendanceLog, OfficeLocation } from "../types";
-import { formatMinutesToDuration, timeToMinutes, getIntervalDuration, isIntervalActiveAtTime } from "../data/mockData";
+import { formatMinutesToDuration, timeToMinutes, getIntervalDuration, getIntervalDurationDateAware, isIntervalActiveAtTime } from "../data/mockData";
 
 interface DashboardStatsProps {
   employees: Employee[];
@@ -16,6 +16,12 @@ interface DashboardStatsProps {
   simulatedTime: string;
   fteHoursStandard: number;
   selectedDate?: string;
+  /** Start of the selected date range (YYYY-MM-DD) */
+  dateFrom?: string;
+  /** End of the selected date range (YYYY-MM-DD) */
+  dateTo?: string;
+  /** Cairo calendar date for today — used to determine open-interval behavior */
+  todayDate?: string;
   allEmployees?: Employee[];
   allLogs?: AttendanceLog[];
 }
@@ -137,6 +143,9 @@ export default function DashboardStats({
   simulatedTime,
   fteHoursStandard,
   selectedDate = "Today",
+  dateFrom,
+  dateTo,
+  todayDate,
   allEmployees,
   allLogs,
 }: DashboardStatsProps) {
@@ -151,13 +160,28 @@ export default function DashboardStats({
     return isInside ? count + 1 : count;
   }, 0);
 
-  // 2. Total daily cumulative duration of all employees in minutes (counting ongoing inside time)
-  const totalMinutes = logs.reduce((sum, log) => {
-    const logSum = log.intervals.reduce((lSum, interval) => {
-      return lSum + getIntervalDuration(interval.enterTime, interval.exitTime, simulatedTime);
+  // 2. Total daily cumulative duration — date-range aware, per-employee accurate
+  const effectiveDateFrom = dateFrom || selectedDate || "";
+  const effectiveDateTo   = dateTo   || selectedDate || "";
+  const effectiveTodayDate = todayDate || selectedDate || "";
+
+  const totalMinutes = logs
+    .filter(log =>
+      !effectiveDateFrom || !effectiveDateTo
+        ? true
+        : log.date >= effectiveDateFrom && log.date <= effectiveDateTo
+    )
+    .reduce((sum, log) => {
+      const logSum = log.intervals.reduce((lSum, interval) => {
+        return lSum + getIntervalDurationDateAware(interval, log.date, effectiveTodayDate, simulatedTime);
+      }, 0);
+      return sum + logSum;
     }, 0);
-    return sum + logSum;
-  }, 0);
+
+  // Period label for UI
+  const periodLabel = effectiveDateFrom && effectiveDateTo && effectiveDateFrom !== effectiveDateTo
+    ? `${effectiveDateFrom} → ${effectiveDateTo}`
+    : effectiveDateFrom || "Today";
 
   // 3. Calculated FTE - assuming custom workday shift standard
   const fteMinutesStandard = fteHoursStandard * 60;
@@ -340,7 +364,11 @@ export default function DashboardStats({
         <div className="flex items-start justify-between w-full">
           <div className="space-y-1.5">
             <p className="text-xs font-semibold text-zinc-400 font-mono tracking-wider uppercase">
-              {selectedDate && selectedDate !== "Today" ? `${selectedDate} Time` : "Cumulative Time"}
+              {periodLabel !== "Today" && periodLabel !== effectiveDateFrom
+                ? `Period Total (${effectiveDateFrom} → ${effectiveDateTo})`
+                : selectedDate && selectedDate !== "Today"
+                ? `${selectedDate} Time`
+                : "Cumulative Time"}
             </p>
             <div className="flex items-baseline gap-2">
               <span className="text-2xl sm:text-3xl font-bold tracking-tight text-zinc-100 font-serif">

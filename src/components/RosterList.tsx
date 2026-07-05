@@ -3,11 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from "react";
-import { Users, UserCheck, UserX, Calendar, ChevronDown, ChevronUp, Plus, Trash2, Clock, Search, ExternalLink, FileText } from "lucide-react";
+import React, { useState, useMemo } from "react";
+import { Users, UserCheck, UserX, Calendar, ChevronDown, ChevronUp, Plus, Trash2, Clock, Search, ExternalLink, FileText, Moon, AlertCircle } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Employee, AttendanceLog, OfficeLocation } from "../types";
-import { formatMinutesToDuration, timeToMinutes, getIntervalDuration, isIntervalActiveAtTime } from "../data/mockData";
+import {
+  formatMinutesToDuration,
+  timeToMinutes,
+  getIntervalDurationDateAware,
+  isIntervalActiveAtTime,
+} from "../data/mockData";
 
 interface RosterListProps {
   employees: Employee[];
@@ -18,7 +23,36 @@ interface RosterListProps {
   onDeleteInterval: (employeeId: string, intervalId: string) => void;
   fteHoursStandard?: number;
   selectedDate?: string;
+  /** Start of the selected date range (YYYY-MM-DD) */
+  dateFrom?: string;
+  /** End of the selected date range (YYYY-MM-DD) */
+  dateTo?: string;
+  /** Cairo calendar date of today — drives open-interval logic */
+  todayDate?: string;
   onViewStaffDetails?: (employeeId: string) => void;
+}
+
+/** Returns every calendar date (YYYY-MM-DD) from dateFrom to dateTo inclusive. */
+function getDateRange(from: string, to: string): string[] {
+  const dates: string[] = [];
+  try {
+    const cur = new Date(from + "T00:00:00Z");
+    const end = new Date(to + "T00:00:00Z");
+    while (cur <= end) {
+      dates.push(cur.toISOString().substring(0, 10));
+      cur.setUTCDate(cur.getUTCDate() + 1);
+    }
+  } catch { /* fallback empty */ }
+  return dates;
+}
+
+/** Friendly short date label, e.g. "Mon, Jul 05" */
+function shortDate(dateStr: string): string {
+  try {
+    return new Date(dateStr + "T00:00:00Z").toLocaleDateString("en-US", {
+      weekday: "short", month: "short", day: "2-digit", timeZone: "UTC"
+    });
+  } catch { return dateStr; }
 }
 
 export default function RosterList({
@@ -30,14 +64,28 @@ export default function RosterList({
   onDeleteInterval,
   fteHoursStandard = 8,
   selectedDate,
+  dateFrom,
+  dateTo,
+  todayDate,
   onViewStaffDetails,
 }: RosterListProps) {
-  const [expandedEmpId, setExpandedEmpId] = useState<string | null>("EMP-003"); // Expanded Sarah by default to highlight mathematical scenario!
+  const [expandedEmpId, setExpandedEmpId] = useState<string | null>(null);
   const [newEnter, setNewEnter] = useState<string>("09:00");
   const [newExit, setNewExit] = useState<string>("17:00");
   const [selectedLoc, setSelectedLoc] = useState<string>(locations[0]?.id || "");
   const [isCurrentlyActive, setIsCurrentlyActive] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>("");
+
+  // Resolve effective date range
+  const effectiveDateFrom = dateFrom || selectedDate || "";
+  const effectiveDateTo   = dateTo   || selectedDate || "";
+  const effectiveTodayDate = todayDate || selectedDate || "";
+
+  const isMultiDay = effectiveDateFrom && effectiveDateTo && effectiveDateFrom !== effectiveDateTo;
+  const dateRange = useMemo(
+    () => (effectiveDateFrom && effectiveDateTo ? getDateRange(effectiveDateFrom, effectiveDateTo) : []),
+    [effectiveDateFrom, effectiveDateTo]
+  );
 
   const toggleExpand = (id: string) => {
     setExpandedEmpId(expandedEmpId === id ? null : id);
@@ -45,27 +93,58 @@ export default function RosterList({
 
   const handleManualAdd = (empId: string) => {
     onAddInterval(empId, selectedLoc, newEnter, isCurrentlyActive ? null : newExit);
-    // Reset defaults
     setNewEnter("09:00");
     setNewExit("17:00");
     setIsCurrentlyActive(false);
   };
 
-  // Filter employees by Search Query (Name, ID, Department, Role, or Branch Location)
+  // ── Per-employee helpers ──────────────────────────────────────────────────
+
+  /** All logs for a given employee within the selected period */
+  const getEmpLogs = (empId: string): AttendanceLog[] =>
+    logs.filter(
+      l => l.employeeId === empId &&
+        (!effectiveDateFrom || l.date >= effectiveDateFrom) &&
+        (!effectiveDateTo   || l.date <= effectiveDateTo)
+    );
+
+  /** Today's log (for live "inside?" check) */
+  const getTodayLog = (empId: string): AttendanceLog | undefined =>
+    logs.find(l => l.employeeId === empId && l.date === effectiveTodayDate);
+
+  /** Total working minutes across the period for one employee */
+  const getEmpTotalMinutes = (empId: string): number => {
+    const empLogs = getEmpLogs(empId);
+    return empLogs.reduce((sum, log) => {
+      return sum + log.intervals.reduce((s, iv) =>
+        s + getIntervalDurationDateAware(iv, log.date, effectiveTodayDate, simulatedTime), 0);
+    }, 0);
+  };
+
+  /** Per-day breakdown for one employee */
+  const getEmpPerDay = (empId: string): Record<string, number> => {
+    const perDay: Record<string, number> = {};
+    const empLogs = getEmpLogs(empId);
+    empLogs.forEach(log => {
+      const dayMins = log.intervals.reduce((s, iv) =>
+        s + getIntervalDurationDateAware(iv, log.date, effectiveTodayDate, simulatedTime), 0);
+      perDay[log.date] = (perDay[log.date] || 0) + dayMins;
+    });
+    return perDay;
+  };
+
+  // ── Filter employees by search query ─────────────────────────────────────
+
   const filteredEmployees = employees.filter((emp) => {
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
-
-    // Check basic details
     if (emp.name.toLowerCase().includes(q)) return true;
     if (emp.id.toLowerCase().includes(q)) return true;
     if (emp.department.toLowerCase().includes(q)) return true;
     if (emp.role.toLowerCase().includes(q)) return true;
-
-    // Check branch locations associated with employee check-ins
-    const empLog = logs.find((l) => l.employeeId === emp.id);
+    const empLog = logs.find(l => l.employeeId === emp.id);
     if (empLog) {
-      const loc = locations.find((l) => l.id === empLog.locationId);
+      const loc = locations.find(l => l.id === empLog.locationId);
       if (loc) {
         if (loc.name.toLowerCase().includes(q)) return true;
         if (loc.code.toLowerCase().includes(q)) return true;
@@ -75,23 +154,26 @@ export default function RosterList({
     return false;
   });
 
-  // Calculate live cumulative metrics for the matching filtered personnel
-  const filteredTotals = filteredEmployees.reduce((totals, emp) => {
-    const empLog = logs.find((l) => l.employeeId === emp.id);
-    const intervals = empLog?.intervals || [];
+  // ── Aggregate totals across filtered employees ────────────────────────────
 
-    const cumulativeMinutes = intervals.reduce((accum, interval) => {
-      return accum + getIntervalDuration(interval.enterTime, interval.exitTime, simulatedTime);
-    }, 0);
+  const filteredTotals = filteredEmployees.reduce(
+    (totals, emp) => {
+      const mins = getEmpTotalMinutes(emp.id);
+      return {
+        count: totals.count + 1,
+        minutes: totals.minutes + mins,
+        fte: totals.fte + mins / (fteHoursStandard * 60),
+      };
+    },
+    { count: 0, minutes: 0, fte: 0 }
+  );
 
-    const empFTE = cumulativeMinutes / (fteHoursStandard * 60);
-
-    return {
-      count: totals.count + 1,
-      minutes: totals.minutes + cumulativeMinutes,
-      fte: totals.fte + empFTE,
-    };
-  }, { count: 0, minutes: 0, fte: 0 });
+  // ── Period summary label ──────────────────────────────────────────────────
+  const periodSuffix = isMultiDay
+    ? ` (${effectiveDateFrom} → ${effectiveDateTo})`
+    : effectiveDateFrom
+    ? ` (${effectiveDateFrom})`
+    : "";
 
   return (
     <div className="bg-[#121212] border border-zinc-800/80 rounded-2xl p-6 shadow-xl" id="employee-roster-section">
@@ -99,26 +181,31 @@ export default function RosterList({
         <div>
           <h3 className="text-base font-semibold text-zinc-100 flex items-center gap-2 font-serif">
             <Users className="w-4.5 h-4.5 text-[#A9853B]" />
-            Personnel Live Durations & Database Roster
+            Personnel Working Hours &amp; Roster
           </h3>
           <p className="text-xs text-zinc-400 mt-0.5 font-mono">
-            Automatically tracks real-time entries, cumulative times, and compliance logs
+            Per-employee working time calculated precisely per shift, including night shifts crossing midnight
           </p>
         </div>
 
         <div className="flex items-center gap-2 text-xs text-zinc-400 font-mono bg-zinc-950 px-3 py-1.5 rounded-lg border border-zinc-850">
           <Calendar className="w-4 h-4 text-[#A9853B]" />
-          <span>Date: <strong className="text-zinc-200">{selectedDate || "Today"}</strong></span>
+          <span>
+            Period:{" "}
+            <strong className="text-zinc-200">
+              {isMultiDay ? `${effectiveDateFrom} → ${effectiveDateTo}` : effectiveDateFrom || "Today"}
+            </strong>
+          </span>
         </div>
       </div>
 
-      {/* Dynamic Search Bar with Suggestions */}
+      {/* Dynamic Search Bar */}
       <div className="mb-5 space-y-3">
         <div className="relative">
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
           <input
             type="text"
-            placeholder="Search by employee, branch location (e.g. HQ-VAULT), or department (e.g. IT, Security)..."
+            placeholder="Search by employee, branch location (e.g. HQ-VAULT), or department..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full bg-[#0a0a0a] text-[#eae6dd] border border-zinc-800 focus:border-[#A9853B] rounded-xl pl-10 pr-10 py-2.5 text-xs focus:ring-1 focus:ring-[#A9853B] focus:outline-none font-sans"
@@ -155,7 +242,7 @@ export default function RosterList({
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-[#A9853B] animate-pulse"></span>
               <span className="text-[10px] uppercase tracking-wider font-mono text-[#D4AF37] font-bold">
-                Filtered Scope Analytics ({selectedDate || "Today"})
+                Filtered Scope Analytics{periodSuffix}
               </span>
             </div>
             <p className="text-xs text-zinc-300">
@@ -169,7 +256,7 @@ export default function RosterList({
               <p className="text-lg font-bold text-zinc-100 font-serif mt-0.5">{filteredTotals.count}</p>
             </div>
             <div className="text-right pl-4">
-              <p className="text-[10px] uppercase font-mono text-zinc-500 font-semibold">Total Cumulative Time</p>
+              <p className="text-[10px] uppercase font-mono text-zinc-500 font-semibold">Total Working Time</p>
               <p className="text-lg font-bold text-[#D4AF37] font-serif mt-0.5">
                 {formatMinutesToDuration(filteredTotals.minutes)}
               </p>
@@ -182,12 +269,12 @@ export default function RosterList({
         </div>
       )}
 
-      {/* Roster List Accumulator Table Layout */}
+      {/* Roster rows */}
       <div className="space-y-3">
         {filteredEmployees.length === 0 ? (
           <div className="p-10 text-center text-zinc-500 border border-dashed border-zinc-800/80 rounded-xl">
             <p className="italic text-xs">No employees found matching your search criteria.</p>
-            <p className="text-[10px] text-zinc-650 text-zinc-600 mt-1.5 font-mono">
+            <p className="text-[10px] text-zinc-600 mt-1.5 font-mono">
               Try searching for departments like "IT", roles, branch codes, or employee names.
             </p>
           </div>
@@ -195,24 +282,33 @@ export default function RosterList({
           <AnimatePresence mode="popLayout">
             {filteredEmployees.map((emp) => {
               const isExpanded = expandedEmpId === emp.id;
-              const empLog = logs.find((l) => l.employeeId === emp.id);
-              const intervals = empLog?.intervals || [];
 
-              // Determine current presence status based on simulated time
-              const isInside = intervals.some((interval) => {
-                return isIntervalActiveAtTime(interval.enterTime, interval.exitTime, simulatedTime);
-              });
+              // Today's intervals for live presence check
+              const todayLog = getTodayLog(emp.id);
+              const todayIntervals = todayLog?.intervals || [];
+              const isInside = todayIntervals.some(iv =>
+                isIntervalActiveAtTime(iv.enterTime, iv.exitTime, simulatedTime)
+              );
+
+              // All logs within the selected period
+              const empLogs = getEmpLogs(emp.id);
+              const allIntervals = empLogs.flatMap(l => l.intervals);
+
+              // Location label
               const currentLocName = isInside
-                ? locations.find((l) => l.id === empLog?.locationId)?.name || "Accruing location..."
+                ? locations.find(l => l.id === (empLogs[0]?.locationId || todayLog?.locationId))?.name || "On-site"
                 : "Outside company perimeter";
 
-              // Calculate cumulative today's active minutes
-              const cumulativeMinutes = intervals.reduce((accum, interval) => {
-                return accum + getIntervalDuration(interval.enterTime, interval.exitTime, simulatedTime);
-              }, 0);
-
-              // Calculate FTE weight contribution
+              // Period totals
+              const cumulativeMinutes = getEmpTotalMinutes(emp.id);
+              const perDay = getEmpPerDay(emp.id);
               const empFTE = Number((cumulativeMinutes / (fteHoursStandard * 60)).toFixed(3));
+
+              // Night shift flag — any cross-midnight interval in the period
+              const hasNightShift = allIntervals.some(iv => iv.crossesMidnight);
+
+              // Max minutes in period for bar scaling
+              const maxDayMins = Math.max(...Object.values(perDay), fteHoursStandard * 60);
 
               return (
                 <motion.div
@@ -228,269 +324,380 @@ export default function RosterList({
                       : "bg-zinc-900/30 border-zinc-800/80 hover:bg-zinc-900/50"
                   }`}
                 >
-                {/* Main summary row */}
-                <div
-                  onClick={() => toggleExpand(emp.id)}
-                  className="p-4 flex flex-wrap items-center justify-between gap-4 cursor-pointer select-none"
-                >
-                  <div className="flex items-center gap-3">
-                    {/* Status Indicator Avatar */}
-                    <div className="relative">
-                      {emp.picture ? (
-                        <img
-                          src={emp.picture}
-                          alt={emp.name}
-                          className="w-10 h-10 rounded-xl object-cover border border-zinc-800/60 shadow-sm"
-                          referrerPolicy="no-referrer"
-                        />
-                      ) : (
-                        <div
-                          className={`w-10 h-10 rounded-xl bg-gradient-to-br ${emp.avatarColor} text-white font-bold flex items-center justify-center text-sm shadow-sm`}
-                        >
-                          {emp.avatar}
-                        </div>
-                      )}
-                      {/* Tiny blinking green/gray icon in corner */}
-                      <span
-                        className={`absolute -bottom-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full border-2 border-zinc-900 ${
-                          isInside ? "bg-[#A9853B]" : "bg-zinc-600"
-                        }`}
-                      >
-                        {isInside ? (
-                          <span className="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-amber-400 opacity-75 animate-pulse"></span>
-                        ) : null}
-                      </span>
-                    </div>
-
-                    <div>
-                      <h4 className="font-bold text-sm text-zinc-100 flex items-center gap-2 font-serif">
-                        {emp.name}
-                        <span className="text-[10px] text-zinc-500 font-mono font-medium">({emp.id})</span>
-                      </h4>
-                      <p className="text-xs text-zinc-400 mt-0.5">
-                        {emp.role} • <span className="text-[#D4AF37] font-medium">{emp.department}</span>
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Center specs: inside/outside location status badge */}
-                  <div className="hidden md:block">
-                    <div className="text-xs">
-                      <div className="flex items-center gap-1.5 font-semibold text-zinc-300">
-                        {isInside ? (
-                          <>
-                            <UserCheck className="w-3.5 h-3.5 text-emerald-400" />
-                            <span className="text-emerald-400 font-mono">Inside Secure Vault</span>
-                          </>
+                  {/* Summary row */}
+                  <div
+                    onClick={() => toggleExpand(emp.id)}
+                    className="p-4 flex flex-wrap items-center justify-between gap-4 cursor-pointer select-none"
+                  >
+                    <div className="flex items-center gap-3">
+                      {/* Avatar */}
+                      <div className="relative">
+                        {emp.picture ? (
+                          <img
+                            src={emp.picture}
+                            alt={emp.name}
+                            className="w-10 h-10 rounded-xl object-cover border border-zinc-800/60 shadow-sm"
+                            referrerPolicy="no-referrer"
+                          />
                         ) : (
-                          <>
-                            <UserX className="w-3.5 h-3.5 text-zinc-500" />
-                            <span className="text-zinc-500 font-mono">Offsite</span>
-                          </>
+                          <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${emp.avatarColor} text-white font-bold flex items-center justify-center text-sm shadow-sm`}>
+                            {emp.avatar}
+                          </div>
                         )}
+                        <span className={`absolute -bottom-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full border-2 border-zinc-900 ${isInside ? "bg-[#A9853B]" : "bg-zinc-600"}`}>
+                          {isInside && <span className="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-amber-400 opacity-75"></span>}
+                        </span>
                       </div>
-                      <p className="text-[10px] text-zinc-400 mt-1 font-mono font-medium truncate max-w-[180px]">
-                        {currentLocName}
-                      </p>
-                    </div>
-                  </div>
 
-                  {/* Right specs: Automatically calculated times */}
-                  <div className="flex items-center gap-4">
-                    <div className="text-right">
-                      <p className="text-xs font-semibold text-zinc-500 font-mono tracking-wider uppercase">
-                        Cumulative Duration
-                      </p>
-                      <p className="text-base font-bold text-[#D4AF37] font-serif mt-0.5">
-                        {formatMinutesToDuration(cumulativeMinutes)}
-                      </p>
-                      <p className="text-[10px] text-zinc-400 font-mono mt-0.5">
-                        FTE Weight: <span className="text-[#A9853B] font-semibold">{empFTE}</span>
-                      </p>
-                    </div>
-
-                    {isExpanded ? (
-                      <ChevronUp className="w-4 h-4 text-zinc-400" />
-                    ) : (
-                      <ChevronDown className="w-4 h-4 text-zinc-400" />
-                    )}
-                  </div>
-                </div>
-
-                {/* Collapsed detailed panel: interval history, actions, & manual adjustments */}
-                {isExpanded && (
-                  <div className="px-5 pb-5 pt-4 border-t border-zinc-800 bg-zinc-950/80 rounded-b-xl space-y-4">
-                    
-                    {/* Action row for Dossier */}
-                    <div className="flex flex-wrap items-center justify-between gap-3 bg-zinc-900/50 p-3 rounded-xl border border-zinc-800/60">
-                      <div className="flex items-center gap-2">
-                        <FileText className="w-4 h-4 text-[#A9853B]" />
-                        <span className="text-xs font-serif font-bold text-zinc-200">Staff Attendance Dossier & Analytics</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (onViewStaffDetails) onViewStaffDetails(emp.id);
-                          }}
-                          className="bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 hover:border-[#A9853B] text-zinc-200 text-[11px] font-bold py-1.5 px-3 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer"
-                        >
-                          <FileText className="w-3.5 h-3.5 text-[#A9853B]" /> View Dossier Here
-                        </button>
-                        <a
-                          href={`/?staffId=${emp.id}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                          }}
-                          className="bg-gradient-to-r from-amber-950/50 to-amber-900/40 hover:from-amber-900/60 hover:to-amber-800/50 border border-[#A9853B]/30 hover:border-[#A9853B]/80 text-[#D4AF37] text-[11px] font-bold py-1.5 px-3 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5" /> Open in New Tab ↗
-                        </a>
-                      </div>
-                    </div>
-
-                    {/* Attendance Log list */}
-                    <div>
-                      <h5 className="text-[11px] font-bold text-zinc-500 font-mono uppercase tracking-wider mb-3">
-                        Segment Logs Recorded Today
-                      </h5>
-
-                      {intervals.length === 0 ? (
-                        <p className="text-xs text-zinc-400 italic py-2">
-                          No check-ins recorded by AIPix core cameras for this subject today.
+                      <div>
+                        <h4 className="font-bold text-sm text-zinc-100 flex items-center gap-2 font-serif">
+                          {emp.name}
+                          {hasNightShift && (
+                            <span title="Night shift detected" className="text-indigo-400">
+                              <Moon className="w-3 h-3 inline" />
+                            </span>
+                          )}
+                          <span className="text-[10px] text-zinc-500 font-mono font-medium">({emp.id})</span>
+                        </h4>
+                        <p className="text-xs text-zinc-400 mt-0.5">
+                          {emp.role} • <span className="text-[#D4AF37] font-medium">{emp.department}</span>
                         </p>
+                      </div>
+                    </div>
+
+                    {/* Location status */}
+                    <div className="hidden md:block">
+                      <div className="text-xs">
+                        <div className="flex items-center gap-1.5 font-semibold text-zinc-300">
+                          {isInside ? (
+                            <>
+                              <UserCheck className="w-3.5 h-3.5 text-emerald-400" />
+                              <span className="text-emerald-400 font-mono">On-site Now</span>
+                            </>
+                          ) : (
+                            <>
+                              <UserX className="w-3.5 h-3.5 text-zinc-500" />
+                              <span className="text-zinc-500 font-mono">Offsite</span>
+                            </>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-zinc-400 mt-1 font-mono font-medium truncate max-w-[180px]">
+                          {currentLocName}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Working time + FTE */}
+                    <div className="flex items-center gap-4">
+                      <div className="text-right">
+                        <p className="text-xs font-semibold text-zinc-500 font-mono tracking-wider uppercase">
+                          {isMultiDay ? "Period Total" : "Today's Time"}
+                        </p>
+                        <p className="text-base font-bold text-[#D4AF37] font-serif mt-0.5">
+                          {cumulativeMinutes > 0 ? formatMinutesToDuration(cumulativeMinutes) : "—"}
+                        </p>
+                        <p className="text-[10px] text-zinc-400 font-mono mt-0.5">
+                          FTE: <span className="text-[#A9853B] font-semibold">{empFTE}</span>
+                        </p>
+                      </div>
+                      {isExpanded ? (
+                        <ChevronUp className="w-4 h-4 text-zinc-400" />
                       ) : (
-                        <div className="space-y-2 mb-4">
-                          {intervals.map((interval) => (
-                            <div
-                              key={interval.id}
-                              className="bg-zinc-900 px-3.5 py-2.5 rounded-lg border border-zinc-800/80 flex justify-between items-center text-xs text-zinc-300 font-mono shadow-3xs"
-                            >
-                              <div className="flex items-center gap-3">
-                                <span className="p-1 px-1.5 rounded bg-amber-950/40 text-[#A9853B] text-[10px] font-bold border border-[#A9853B]/20">
-                                  INTERVAL
-                                </span>
-                                <span>
-                                  Entered: <strong className="text-zinc-100">{interval.enterTime}</strong>
-                                </span>
-                                <span>•</span>
-                                <span>
-                                  Exited:{" "}
-                                  <strong className="text-zinc-100">
-                                    {interval.exitTime || `Inside (In progress...)`}
-                                  </strong>
-                                </span>
-                              </div>
+                        <ChevronDown className="w-4 h-4 text-zinc-400" />
+                      )}
+                    </div>
+                  </div>
 
-                              <div className="flex items-center gap-3">
-                                <span className="text-[#D4AF37] font-bold bg-[#A9853B]/10 px-2 py-0.5 rounded text-[10px] border border-[#A9853B]/20">
-                                  {formatMinutesToDuration(
-                                    getIntervalDuration(interval.enterTime, interval.exitTime, simulatedTime)
-                                  )}
-                                </span>
+                  {/* Expanded detail panel */}
+                  {isExpanded && (
+                    <div className="px-5 pb-5 pt-4 border-t border-zinc-800 bg-zinc-950/80 rounded-b-xl space-y-5">
 
-                                <button
-                                  onClick={() => onDeleteInterval(emp.id, interval.id)}
-                                  className="p-1.5 hover:text-rose-400 hover:bg-rose-950/30 text-zinc-500 rounded transition-all cursor-pointer"
-                                  title="Delete attendance interval segment"
-                                  id={`delete-int-${interval.id}`}
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
+                      {/* Dossier CTA */}
+                      <div className="flex flex-wrap items-center justify-between gap-3 bg-zinc-900/50 p-3 rounded-xl border border-zinc-800/60">
+                        <div className="flex items-center gap-2">
+                          <FileText className="w-4 h-4 text-[#A9853B]" />
+                          <span className="text-xs font-serif font-bold text-zinc-200">Staff Attendance Dossier &amp; Analytics</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); if (onViewStaffDetails) onViewStaffDetails(emp.id); }}
+                            className="bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 hover:border-[#A9853B] text-zinc-200 text-[11px] font-bold py-1.5 px-3 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer"
+                          >
+                            <FileText className="w-3.5 h-3.5 text-[#A9853B]" /> View Dossier
+                          </button>
+                          <a
+                            href={`/?staffId=${emp.id}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="bg-gradient-to-r from-amber-950/50 to-amber-900/40 hover:from-amber-900/60 hover:to-amber-800/50 border border-[#A9853B]/30 hover:border-[#A9853B]/80 text-[#D4AF37] text-[11px] font-bold py-1.5 px-3 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" /> Open in New Tab ↗
+                          </a>
+                        </div>
+                      </div>
+
+                      {/* ── Period Working-Time Breakdown ────────────────────────────── */}
+                      {dateRange.length > 0 && (
+                        <div>
+                          <h5 className="text-[11px] font-bold text-zinc-500 font-mono uppercase tracking-wider mb-3 flex items-center gap-2">
+                            <Clock className="w-3.5 h-3.5 text-[#A9853B]" />
+                            Working Time Breakdown{isMultiDay ? ` — ${dateRange.length} Days` : ""}
+                          </h5>
+
+                          <div className="bg-[#090909] border border-zinc-850 rounded-xl p-3.5 space-y-2">
+                            {dateRange.map(date => {
+                              const mins = perDay[date] || 0;
+                              const dayLog = logs.find(l => l.employeeId === emp.id && l.date === date);
+                              const hasNight = dayLog?.intervals.some(iv => iv.crossesMidnight) || false;
+                              const isOpen  = dayLog?.intervals.some(iv => !iv.exitTime) || false;
+                              const isToday = date === effectiveTodayDate;
+                              const barPct  = maxDayMins > 0 ? Math.min(100, (mins / maxDayMins) * 100) : 0;
+                              const fteDay  = mins / (fteHoursStandard * 60);
+
+                              return (
+                                <div key={date} className="flex items-center gap-3 text-[11px] font-mono">
+                                  {/* Date label */}
+                                  <span className={`w-[110px] shrink-0 ${isToday ? "text-[#D4AF37] font-bold" : "text-zinc-400"}`}>
+                                    {shortDate(date)}{isToday ? " ⬅" : ""}
+                                  </span>
+
+                                  {/* Bar */}
+                                  <div className="flex-1 bg-zinc-900 rounded-full h-1.5 overflow-hidden">
+                                    <div
+                                      className={`h-full rounded-full transition-all ${
+                                        mins === 0
+                                          ? "w-0"
+                                          : hasNight
+                                          ? "bg-indigo-500"
+                                          : isToday && isOpen
+                                          ? "bg-amber-400 animate-pulse"
+                                          : "bg-[#A9853B]"
+                                      }`}
+                                      style={{ width: `${barPct}%` }}
+                                    />
+                                  </div>
+
+                                  {/* Duration */}
+                                  <span className={`w-[62px] text-right ${mins > 0 ? "text-zinc-200" : "text-zinc-600 italic"}`}>
+                                    {mins > 0 ? formatMinutesToDuration(mins) : "—"}
+                                  </span>
+
+                                  {/* Badges */}
+                                  <div className="flex items-center gap-1 w-[90px]">
+                                    {hasNight && (
+                                      <span title="Night shift — crosses midnight" className="flex items-center gap-0.5 text-indigo-400 text-[9px] font-bold">
+                                        <Moon className="w-2.5 h-2.5" /> NIGHT
+                                      </span>
+                                    )}
+                                    {isToday && isOpen && (
+                                      <span className="text-amber-400 text-[9px] font-bold animate-pulse">⏳ LIVE</span>
+                                    )}
+                                    {mins > 0 && !hasNight && !isOpen && (
+                                      <span className="text-zinc-600 text-[9px]">
+                                        {Number(fteDay.toFixed(2))} FTE
+                                      </span>
+                                    )}
+                                    {!dayLog && (
+                                      <span className="text-zinc-700 text-[9px] italic">No record</span>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+
+                            {/* Totals row */}
+                            <div className="border-t border-zinc-800 mt-2 pt-2 flex items-center justify-between text-[11px] font-mono">
+                              <span className="text-zinc-500 uppercase tracking-wider">Period Total</span>
+                              <div className="flex items-center gap-4">
+                                <span className="text-[#D4AF37] font-bold text-sm">
+                                  {cumulativeMinutes > 0 ? formatMinutesToDuration(cumulativeMinutes) : "No records"}
+                                </span>
+                                <span className="text-zinc-500">
+                                  = <span className="text-[#A9853B] font-semibold">{empFTE}</span> FTE
+                                  <span className="text-zinc-600 ml-1">({fteHoursStandard}h/shift)</span>
+                                </span>
                               </div>
                             </div>
-                          ))}
+                          </div>
                         </div>
                       )}
-                    </div>
 
-                    {/* Quick insert utility form */}
-                    <div className="mt-5 pt-3.5 border-t border-zinc-800">
-                      <h5 className="text-[11px] font-bold text-zinc-500 font-mono uppercase tracking-wider mb-3.5">
-                        Manual Camera Adjustment (AIPix Bypass Override)
-                      </h5>
+                      {/* ── Interval Segments List ───────────────────────────────────── */}
+                      <div>
+                        <h5 className="text-[11px] font-bold text-zinc-500 font-mono uppercase tracking-wider mb-3">
+                          All Recorded Segments{isMultiDay ? ` (${effectiveDateFrom} → ${effectiveDateTo})` : ""}
+                        </h5>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 bg-zinc-900 p-4 rounded-xl border border-zinc-800 shadow-3xs">
-                        <div>
-                          <label className="block text-[10px] font-semibold text-zinc-400 mb-1 font-mono">
-                            BTC Hub Location
-                          </label>
-                          <select
-                            className="w-full bg-zinc-950 text-zinc-200 border border-zinc-800 rounded-lg py-1.5 px-2.5 text-xs focus:ring-1 focus:ring-[#A9853B] focus:border-[#A9853B]"
-                            value={selectedLoc}
-                            onChange={(e) => setSelectedLoc(e.target.value)}
-                          >
-                            {locations.map((loc) => (
-                              <option key={loc.id} value={loc.id} className="bg-zinc-950 text-zinc-200">
-                                {loc.code}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                        {empLogs.length === 0 ? (
+                          <p className="text-xs text-zinc-400 italic py-2">
+                            No check-ins recorded by AIPix cameras for this period.
+                          </p>
+                        ) : (
+                          <div className="space-y-3">
+                            {empLogs
+                              .sort((a, b) => a.date.localeCompare(b.date))
+                              .map(log => (
+                                <div key={log.id}>
+                                  {/* Day header */}
+                                  <div className="flex items-center gap-2 mb-1.5">
+                                    <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border ${
+                                      log.date === effectiveTodayDate
+                                        ? "bg-amber-950/40 text-[#D4AF37] border-[#A9853B]/30"
+                                        : "bg-zinc-900 text-zinc-400 border-zinc-800"
+                                    }`}>
+                                      {shortDate(log.date)}
+                                      {log.date === effectiveTodayDate ? "  (Today)" : ""}
+                                    </span>
+                                    <span className="text-[10px] text-zinc-600 font-mono">
+                                      {formatMinutesToDuration(perDay[log.date] || 0)}
+                                    </span>
+                                  </div>
 
-                        <div>
-                          <label className="block text-[10px] font-semibold text-zinc-400 mb-1 font-mono">
-                            Enter Time (HH:MM)
-                          </label>
-                          <input
-                            type="text"
-                            placeholder="e.g. 14:30"
-                            value={newEnter}
-                            onChange={(e) => setNewEnter(e.target.value)}
-                            className="w-full bg-zinc-950 text-[#eae6dd] border border-zinc-800 rounded-lg py-1.5 px-2.5 text-xs font-mono focus:ring-1 focus:ring-[#A9853B] focus:border-[#A9853B]"
-                          />
-                        </div>
+                                  {/* Intervals for this day */}
+                                  <div className="space-y-1.5 pl-2 border-l border-zinc-800">
+                                    {log.intervals.map(interval => {
+                                      const dur = getIntervalDurationDateAware(
+                                        interval, log.date, effectiveTodayDate, simulatedTime
+                                      );
+                                      return (
+                                        <div
+                                          key={interval.id}
+                                          className="bg-zinc-900 px-3.5 py-2.5 rounded-lg border border-zinc-800/80 flex justify-between items-center text-xs text-zinc-300 font-mono shadow-3xs"
+                                        >
+                                          <div className="flex items-center gap-3 flex-wrap">
+                                            <span className="p-1 px-1.5 rounded bg-amber-950/40 text-[#A9853B] text-[10px] font-bold border border-[#A9853B]/20">
+                                              INTERVAL
+                                            </span>
+                                            <span>
+                                              In: <strong className="text-zinc-100">{interval.enterTime}</strong>
+                                            </span>
+                                            <span>•</span>
+                                            <span>
+                                              Out:{" "}
+                                              <strong className="text-zinc-100">
+                                                {interval.exitTime
+                                                  ? interval.crossesMidnight
+                                                    ? `${interval.exitTime} +1d`
+                                                    : interval.exitTime
+                                                  : "Active..."}
+                                              </strong>
+                                            </span>
+                                            {interval.crossesMidnight && (
+                                              <span className="flex items-center gap-0.5 text-indigo-400 text-[9px] font-bold">
+                                                <Moon className="w-2.5 h-2.5" /> NIGHT SHIFT
+                                              </span>
+                                            )}
+                                            {!interval.exitTime && log.date < effectiveTodayDate && (
+                                              <span className="flex items-center gap-1 text-amber-500 text-[9px] font-bold">
+                                                <AlertCircle className="w-2.5 h-2.5" /> EST. EXIT
+                                              </span>
+                                            )}
+                                          </div>
 
-                        <div>
-                          <label className="block text-[10px] font-semibold text-zinc-400 mb-1 font-mono">
-                            Exit Time (HH:MM)
-                          </label>
-                          <div className="flex items-center gap-2">
+                                          <div className="flex items-center gap-3">
+                                            <span className="text-[#D4AF37] font-bold bg-[#A9853B]/10 px-2 py-0.5 rounded text-[10px] border border-[#A9853B]/20">
+                                              {formatMinutesToDuration(dur)}
+                                            </span>
+                                            <button
+                                              onClick={() => onDeleteInterval(emp.id, interval.id)}
+                                              className="p-1.5 hover:text-rose-400 hover:bg-rose-950/30 text-zinc-500 rounded transition-all cursor-pointer"
+                                              title="Delete attendance interval segment"
+                                              id={`delete-int-${interval.id}`}
+                                            >
+                                              <Trash2 className="w-3.5 h-3.5" />
+                                            </button>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* ── Manual Adjustment Form ───────────────────────────────────── */}
+                      <div className="mt-1 pt-3.5 border-t border-zinc-800">
+                        <h5 className="text-[11px] font-bold text-zinc-500 font-mono uppercase tracking-wider mb-3.5">
+                          Manual Camera Adjustment (AIPix Bypass Override)
+                        </h5>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 bg-zinc-900 p-4 rounded-xl border border-zinc-800 shadow-3xs">
+                          <div>
+                            <label className="block text-[10px] font-semibold text-zinc-400 mb-1 font-mono">
+                              BTC Hub Location
+                            </label>
+                            <select
+                              className="w-full bg-zinc-950 text-zinc-200 border border-zinc-800 rounded-lg py-1.5 px-2.5 text-xs focus:ring-1 focus:ring-[#A9853B] focus:border-[#A9853B]"
+                              value={selectedLoc}
+                              onChange={(e) => setSelectedLoc(e.target.value)}
+                            >
+                              {locations.map((loc) => (
+                                <option key={loc.id} value={loc.id} className="bg-zinc-950 text-zinc-200">
+                                  {loc.code}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-[10px] font-semibold text-zinc-400 mb-1 font-mono">
+                              Enter Time (HH:MM)
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="e.g. 14:30"
+                              value={newEnter}
+                              onChange={(e) => setNewEnter(e.target.value)}
+                              className="w-full bg-zinc-950 text-[#eae6dd] border border-zinc-800 rounded-lg py-1.5 px-2.5 text-xs font-mono focus:ring-1 focus:ring-[#A9853B] focus:border-[#A9853B]"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[10px] font-semibold text-zinc-400 mb-1 font-mono">
+                              Exit Time (HH:MM)
+                            </label>
                             <input
                               type="text"
                               placeholder="e.g. 15:00"
                               disabled={isCurrentlyActive}
                               value={newExit}
                               onChange={(e) => setNewExit(e.target.value)}
-                              className={`w-full bg-zinc-950 text-[#eae6dd] border border-zinc-800 rounded-lg py-1.5 px-2.5 text-xs font-mono focus:ring-1 focus:ring-[#A9853B] focus:border-[#A9853B] ${
-                                isCurrentlyActive ? "opacity-50 cursor-not-allowed" : ""
-                              }`}
+                              className={`w-full bg-zinc-950 text-[#eae6dd] border border-zinc-800 rounded-lg py-1.5 px-2.5 text-xs font-mono focus:ring-1 focus:ring-[#A9853B] focus:border-[#A9853B] ${isCurrentlyActive ? "opacity-50 cursor-not-allowed" : ""}`}
                             />
                           </div>
-                        </div>
 
-                        <div className="flex flex-col justify-end">
-                          <button
-                            onClick={() => handleManualAdd(emp.id)}
-                            className="w-full bg-gradient-to-r from-[#D4AF37] to-[#A9853B] text-zinc-950 font-bold py-1.5 px-3 rounded-lg text-xs flex justify-center items-center gap-1.5 transition-all shadow-md cursor-pointer hover:brightness-110 active:scale-95"
-                          >
-                            <Plus className="w-3.5 h-3.5 text-zinc-950" /> Adjust Log
-                          </button>
-                        </div>
+                          <div className="flex flex-col justify-end">
+                            <button
+                              onClick={() => handleManualAdd(emp.id)}
+                              className="w-full bg-gradient-to-r from-[#D4AF37] to-[#A9853B] text-zinc-950 font-bold py-1.5 px-3 rounded-lg text-xs flex justify-center items-center gap-1.5 transition-all shadow-md cursor-pointer hover:brightness-110 active:scale-95"
+                            >
+                              <Plus className="w-3.5 h-3.5 text-zinc-950" /> Adjust Log
+                            </button>
+                          </div>
 
-                        {/* Active toggler check */}
-                        <div className="sm:col-span-4 mt-2">
-                          <label className="inline-flex items-center gap-1.5 cursor-pointer select-none">
-                            <input
-                              type="checkbox"
-                              checked={isCurrentlyActive}
-                              onChange={(e) => setIsCurrentlyActive(e.target.checked)}
-                              className="bg-zinc-950 border-zinc-800 rounded text-[#A9853B] focus:ring-0 focus:border-[#A9853B]"
-                            />
-                            <span className="text-[10.5px] font-mono text-zinc-400 font-semibold">
-                              Subject is still inside secure vault perimeter (No departure checkout timestamp)
-                            </span>
-                          </label>
+                          <div className="sm:col-span-4 mt-2">
+                            <label className="inline-flex items-center gap-1.5 cursor-pointer select-none">
+                              <input
+                                type="checkbox"
+                                checked={isCurrentlyActive}
+                                onChange={(e) => setIsCurrentlyActive(e.target.checked)}
+                                className="bg-zinc-950 border-zinc-800 rounded text-[#A9853B] focus:ring-0 focus:border-[#A9853B]"
+                              />
+                              <span className="text-[10.5px] font-mono text-zinc-400 font-semibold">
+                                Subject is still inside secure vault perimeter (No departure checkout timestamp)
+                              </span>
+                            </label>
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                )}
-              </motion.div>
-            );
-          })}
+                  )}
+                </motion.div>
+              );
+            })}
           </AnimatePresence>
         )}
       </div>

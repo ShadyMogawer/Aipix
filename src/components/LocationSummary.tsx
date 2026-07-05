@@ -24,7 +24,8 @@ import {
   CheckCircle2,
   Eye,
   ShieldAlert,
-  ArrowLeft
+  ArrowLeft,
+  Flame
 } from "lucide-react";
 import {
   BarChart,
@@ -94,9 +95,18 @@ export default function LocationSummary({
 
   // Local states for advanced camera monitoring
   const [offlineCameras, setOfflineCameras] = useState<string[]>([]);
+  const [cameraStreamModes, setCameraStreamModes] = useState<Record<string, "analytics" | "thermal" | "night" | "raw">>({});
   const [inspectedCamera, setInspectedCamera] = useState<string | null>(null);
   const [isDiagnosticRunning, setIsDiagnosticRunning] = useState(false);
   const [diagnosticLogs, setDiagnosticLogs] = useState<string[]>([]);
+  const [streamTicks, setStreamTicks] = useState(0);
+
+  React.useEffect(() => {
+    const timer = setInterval(() => {
+      setStreamTicks((t) => t + 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Discover and list cameras: ONLY return those returned or present in the AIPix API event logs (detections) for the selected location!
   const camerasForLocation = useMemo(() => {
@@ -341,6 +351,34 @@ export default function LocationSummary({
         .animate-border-pulse {
           animation: borderPulse 1.8s infinite ease-in-out;
         }
+        @keyframes scanline {
+          0% { transform: translateY(-100%); }
+          100% { transform: translateY(100%); }
+        }
+        .animate-scanline {
+          animation: scanline 4s linear infinite;
+        }
+        @keyframes staticNoise {
+          0%, 100% { opacity: 0.04; }
+          50% { opacity: 0.12; }
+        }
+        .animate-static-noise {
+          animation: staticNoise 0.15s steps(4) infinite;
+        }
+        @keyframes trackingBracket {
+          0%, 100% { transform: scale(1.0); opacity: 0.85; }
+          50% { transform: scale(1.03); opacity: 1; }
+        }
+        .animate-tracking-bracket {
+          animation: trackingBracket 1.5s infinite ease-in-out;
+        }
+        @keyframes thermalPulse {
+          0%, 100% { transform: scale(0.9) translate(-50%, -50%); opacity: 0.4; }
+          50% { transform: scale(1.1) translate(-45%, -45%); opacity: 0.75; }
+        }
+        .animate-thermal-pulse {
+          animation: thermalPulse 3s infinite ease-in-out;
+        }
       `}</style>
       {/* Site Selector Card Deck (1 Column width on desktop) */}
       <div className="space-y-4">
@@ -575,6 +613,29 @@ export default function LocationSummary({
                             <p className="text-[9px] text-zinc-400 font-mono">
                               {cameraIP}
                             </p>
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              <span
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (!status.isOnline) return;
+                                  const currentMode = cameraStreamModes[cameraName] || "analytics";
+                                  const modes: ("analytics" | "thermal" | "night" | "raw" | "vms")[] = ["analytics", "thermal", "night", "raw", "vms"];
+                                  const nextMode = modes[(modes.indexOf(currentMode) + 1) % modes.length];
+                                  setCameraStreamModes((prev) => ({ ...prev, [cameraName]: nextMode }));
+                                }}
+                                className={`px-1.5 py-0.5 rounded text-[8px] font-mono font-bold transition-all border ${
+                                  !status.isOnline
+                                    ? "bg-zinc-950 text-zinc-600 border-zinc-900 cursor-not-allowed"
+                                    : "bg-zinc-850 hover:bg-[#A9853B]/20 text-[#A9853B] border-zinc-800 hover:border-[#A9853B]/40 cursor-pointer"
+                                }`}
+                                title={status.isOnline ? "Click to cycle streaming modes" : "Camera offline"}
+                              >
+                                {((cameraStreamModes[cameraName] || "analytics") === "analytics" ? "AI ANALYTICS" :
+                                  (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "FLIR THERMAL" :
+                                  (cameraStreamModes[cameraName] || "analytics") === "night" ? "IR NIGHT" :
+                                  (cameraStreamModes[cameraName] || "analytics") === "vms" ? "VMS LIVE" : "RAW FEED")}
+                              </span>
+                            </div>
                           </div>
                           
                           {/* Blinking indicator dot */}
@@ -752,94 +813,253 @@ export default function LocationSummary({
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                 {/* Left Side: Live Feed Screen (8 Columns on desktop) */}
                 <div className="lg:col-span-7 flex flex-col space-y-4">
-                  <div className="flex items-center justify-between">
+                  {/* Header info with stream selector tabs */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-zinc-900/50 p-3 rounded-xl border border-zinc-800/80">
                     <span className="text-xs font-mono text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
                       <span className={`h-2 w-2 rounded-full ${status.isOnline ? "bg-emerald-500 animate-pulse" : "bg-rose-500"}`} />
                       Live Stream Feed
                     </span>
-                    <span className="text-[10px] font-mono text-zinc-500">
+                    
+                    {status.isOnline && (
+                      <div className="flex items-center gap-1 p-1 bg-zinc-950 rounded-xl border border-zinc-850">
+                        {(["analytics", "thermal", "night", "raw"] as const).map((mode) => {
+                          const activeMode = cameraStreamModes[cameraName] || "analytics";
+                          const isSelected = activeMode === mode;
+                          const labels: Record<string, string> = {
+                            analytics: "AI Analytics",
+                            thermal: "FLIR Thermal",
+                            night: "IR Night",
+                            raw: "Raw Feed"
+                          };
+                          
+                          return (
+                            <button
+                              key={mode}
+                              onClick={() => setCameraStreamModes(prev => ({ ...prev, [cameraName]: mode }))}
+                              className={`px-3 py-1 rounded-lg text-[10px] font-semibold font-mono tracking-wide transition-all duration-200 cursor-pointer ${
+                                isSelected
+                                  ? "bg-gradient-to-r from-[#D4AF37] to-[#A9853B] text-zinc-950 font-bold shadow-md"
+                                  : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50"
+                              }`}
+                            >
+                              {labels[mode]}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                    
+                    <span className="text-[10px] font-mono text-zinc-500 hidden sm:inline">
                       RESOLVED: {activeLocation.code === "HQ-VAULT" ? "3840x2160 @ 60 FPS" : "1920x1080 @ 120 FPS"}
                     </span>
                   </div>
-
+ 
                   {/* Video Canvas Box */}
-                  <div className="relative bg-[#090909] aspect-video rounded-xl border border-zinc-800 overflow-hidden shadow-inner flex flex-col items-center justify-center group">
+                  <div className={`relative aspect-video rounded-xl border overflow-hidden shadow-inner flex flex-col items-center justify-center group transition-all duration-350 ${
+                    !status.isOnline ? "bg-[#090909] border-zinc-800" :
+                    (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "bg-[#05001a] border-purple-900/50" :
+                    (cameraStreamModes[cameraName] || "analytics") === "night" ? "bg-[#021003] border-emerald-950/80" :
+                    "bg-[#090909] border-zinc-800"
+                  }`}>
                     {/* Simulated scanning lines effect */}
-                    <div className="absolute inset-0 bg-linear-to-b from-transparent via-zinc-950/10 to-transparent bg-[size:100%_4px] pointer-events-none opacity-40"></div>
+                    <div className={`absolute inset-0 pointer-events-none opacity-40 bg-linear-to-b from-transparent via-zinc-950/10 to-transparent bg-[size:100%_4px] ${
+                      (cameraStreamModes[cameraName] || "analytics") === "night" ? "opacity-60 bg-[size:100%_3px]" : ""
+                    }`}></div>
+                    
                     {/* Corner high-tech target markings */}
-                    <div className="absolute top-4 left-4 w-4 h-4 border-t-2 border-l-2 border-zinc-700 pointer-events-none"></div>
-                    <div className="absolute top-4 right-4 w-4 h-4 border-t-2 border-r-2 border-zinc-700 pointer-events-none"></div>
-                    <div className="absolute bottom-4 left-4 w-4 h-4 border-b-2 border-l-2 border-zinc-700 pointer-events-none"></div>
-                    <div className="absolute bottom-4 right-4 w-4 h-4 border-b-2 border-r-2 border-zinc-700 pointer-events-none"></div>
+                    <div className={`absolute top-4 left-4 w-4 h-4 border-t-2 border-l-2 pointer-events-none transition-colors ${
+                      !status.isOnline ? "border-zinc-700" :
+                      (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "border-purple-500/40" :
+                      (cameraStreamModes[cameraName] || "analytics") === "night" ? "border-emerald-500/40" : "border-zinc-700"
+                    }`}></div>
+                    <div className={`absolute top-4 right-4 w-4 h-4 border-t-2 border-r-2 pointer-events-none transition-colors ${
+                      !status.isOnline ? "border-zinc-700" :
+                      (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "border-purple-500/40" :
+                      (cameraStreamModes[cameraName] || "analytics") === "night" ? "border-emerald-500/40" : "border-zinc-700"
+                    }`}></div>
+                    <div className={`absolute bottom-4 left-4 w-4 h-4 border-b-2 border-l-2 pointer-events-none transition-colors ${
+                      !status.isOnline ? "border-zinc-700" :
+                      (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "border-purple-500/40" :
+                      (cameraStreamModes[cameraName] || "analytics") === "night" ? "border-emerald-500/40" : "border-zinc-700"
+                    }`}></div>
+                    <div className={`absolute bottom-4 right-4 w-4 h-4 border-b-2 border-r-2 pointer-events-none transition-colors ${
+                      !status.isOnline ? "border-zinc-700" :
+                      (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "border-purple-500/40" :
+                      (cameraStreamModes[cameraName] || "analytics") === "night" ? "border-emerald-500/40" : "border-zinc-700"
+                    }`}></div>                    {status.isOnline ? (
+                      (cameraStreamModes[cameraName] || "analytics") === "vms" ? (
+                        <iframe
+                          src="https://aipix.gsd-me.com/cam"
+                          className="w-full h-full border-none bg-[#111]"
+                          title="AIPix Live VMS Portal"
+                          allow="autoplay; encrypted-media"
+                        />
+                      ) : (
+                        <>
+                          {/* Live crosshairs */}
+                          {((cameraStreamModes[cameraName] || "analytics") !== "raw") && (
+                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-20">
+                              <div className={`w-12 h-12 border border-dashed rounded-full animate-spin duration-10000 ${
+                                (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "border-purple-400" :
+                                (cameraStreamModes[cameraName] || "analytics") === "night" ? "border-emerald-400" : "border-[#A9853B]"
+                              }`}></div>
+                              <div className={`absolute w-20 h-0.5 ${
+                                (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "bg-purple-500" :
+                                (cameraStreamModes[cameraName] || "analytics") === "night" ? "bg-emerald-500" : "bg-[#A9853B]"
+                              }`}></div>
+                              <div className={`absolute h-20 w-0.5 ${
+                                (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "bg-purple-500" :
+                                (cameraStreamModes[cameraName] || "analytics") === "night" ? "bg-emerald-500" : "bg-[#A9853B]"
+                              }`}></div>
+                            </div>
+                          )}
 
-                    {status.isOnline ? (
-                      <>
-                        {/* Live crosshair */}
-                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-20">
-                          <div className="w-12 h-12 border border-dashed border-[#A9853B] rounded-full animate-spin duration-10000"></div>
-                          <div className="absolute w-20 h-0.5 bg-[#A9853B]"></div>
-                          <div className="absolute h-20 w-0.5 bg-[#A9853B]"></div>
-                        </div>
+                          {/* Custom thermal heatmap pulsing nodes */}
+                          {(cameraStreamModes[cameraName] || "analytics") === "thermal" && (
+                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                              <div className="absolute w-56 h-56 rounded-full bg-red-600/35 blur-2xl animate-pulse"></div>
+                              <div className="absolute w-24 h-24 rounded-full bg-yellow-400/40 blur-xl animate-ping duration-3000"></div>
+                              <div className="absolute w-12 h-12 rounded-full bg-white/50 blur-md"></div>
+                            </div>
+                          )}
 
-                        {/* Camera OSD */}
-                        <div className="absolute top-4 left-6 text-[9px] font-mono text-emerald-400/80 uppercase space-y-1 bg-zinc-950/70 p-2 rounded border border-zinc-800/40 select-none">
-                          <p>STREAM: FEED_OK</p>
-                          <p>BITRATE: {status.state === "transmitting" ? "12.4 Mbps" : "2.1 Mbps"}</p>
-                          <p>LATENCY: 4.8ms</p>
-                        </div>
-                        
-                        <div className="absolute bottom-4 left-6 text-[9px] font-mono text-emerald-400/80 uppercase bg-zinc-950/70 p-2 rounded border border-zinc-800/40 select-none">
-                          <p>{activeLocation.code} / {cameraName.toUpperCase()}</p>
-                        </div>
+                          {/* Night vision grain/noise overlay */}
+                          {(cameraStreamModes[cameraName] || "analytics") === "night" && (
+                            <div className="absolute inset-0 pointer-events-none opacity-[0.07] bg-[radial-gradient(#fff_1px,transparent_1px)] [background-size:16px_16px]"></div>
+                          )}
 
-                        {status.state === "transmitting" && latestDet && matchedEmployee ? (
-                          /* Subject Detected Overlay Box */
-                          <div className="absolute inset-x-12 inset-y-8 flex flex-col items-center justify-center">
-                            {/* Scanning overlay bracket */}
-                            <div className="relative border border-amber-500/50 bg-zinc-950/90 p-4 rounded-xl flex items-center gap-4 animate-in zoom-in duration-300 shadow-xl border-dashed">
-                              <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-amber-500 text-zinc-950 text-[9px] font-extrabold uppercase px-2 py-0.5 rounded tracking-widest font-mono">
-                                SUBJECT IDENTIFIED
-                              </div>
+                          {/* Camera OSD */}
+                          <div className={`absolute top-4 left-6 text-[9px] font-mono uppercase space-y-1 bg-zinc-950/80 p-2.5 rounded-lg border select-none ${
+                            (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "text-purple-400 border-purple-900/50" :
+                            (cameraStreamModes[cameraName] || "analytics") === "night" ? "text-emerald-400 border-emerald-950/60" :
+                            "text-emerald-400/80 border-zinc-800/40"
+                          }`}>
+                            <p>
+                              STREAM: {
+                                (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "FLIR_THERMAL_OK" :
+                                (cameraStreamModes[cameraName] || "analytics") === "night" ? "IR_NIGHT_VISION_ON" :
+                                (cameraStreamModes[cameraName] || "analytics") === "raw" ? "RAW_LOW_LATENCY" : "AI_ANALYTICS_OK"
+                              }
+                            </p>
+                            <p>
+                              TIME: {simulatedTime}:{String(streamTicks % 60).padStart(2, "0")}
+                            </p>
+                            <p>
+                              BITRATE: {
+                                (cameraStreamModes[cameraName] || "analytics") === "raw" ? "0.8 Mbps" :
+                                (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "8.4 Mbps" :
+                                status.state === "transmitting" ? "12.4 Mbps" : "2.1 Mbps"
+                              }
+                            </p>
+                            <p>
+                              LATENCY: {
+                                (cameraStreamModes[cameraName] || "analytics") === "raw" ? "1.2ms" :
+                                (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "14.2ms" : "4.8ms"
+                              }
+                            </p>
+                          </div>
+                          
+                          <div className={`absolute bottom-4 left-6 text-[9px] font-mono uppercase bg-zinc-950/80 p-2.5 rounded-lg border select-none ${
+                            (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "text-purple-450 border-purple-900/50" :
+                            (cameraStreamModes[cameraName] || "analytics") === "night" ? "text-emerald-450 border-emerald-950/60" :
+                            "text-emerald-400/80 border-zinc-800/40"
+                          }`}>
+                            <p>{activeLocation.code} / {cameraName.toUpperCase()}</p>
+                          </div>
 
-                              {matchedEmployee.picture ? (
-                                <img
-                                  src={matchedEmployee.picture}
-                                  alt={matchedEmployee.name}
-                                  className="w-12 h-12 rounded-lg object-cover border border-amber-500/50"
-                                  referrerPolicy="no-referrer"
-                                />
-                              ) : (
-                                <div className={`w-12 h-12 rounded-lg bg-gradient-to-br ${matchedEmployee.avatarColor} text-white font-extrabold flex items-center justify-center text-sm border border-amber-500/50`}>
-                                  {matchedEmployee.avatar}
+                          {status.state === "transmitting" && latestDet && matchedEmployee ? (
+                            /* Subject Detected Overlay Box */
+                            <div className="absolute inset-x-12 inset-y-8 flex flex-col items-center justify-center">
+                              {/* Scanning overlay bracket */}
+                              <div className={`relative border p-4 rounded-xl flex items-center gap-4 animate-in zoom-in duration-300 shadow-xl border-dashed animate-tracking-bracket ${
+                                (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "bg-[#05001a]/95 border-purple-500" :
+                                (cameraStreamModes[cameraName] || "analytics") === "night" ? "bg-[#021003]/95 border-emerald-500" :
+                                "bg-zinc-950/90 border-amber-500/50"
+                              }`}>
+                                <div className={`absolute -top-3 left-1/2 -translate-x-1/2 text-[9px] font-extrabold uppercase px-2 py-0.5 rounded tracking-widest font-mono ${
+                                  (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "bg-purple-600 text-white" :
+                                  (cameraStreamModes[cameraName] || "analytics") === "night" ? "bg-emerald-600 text-white" :
+                                  "bg-amber-500 text-zinc-950"
+                                }`}>
+                                  {((cameraStreamModes[cameraName] || "analytics") === "thermal" ? "THERMAL TARGET" : "SUBJECT IDENTIFIED")}
                                 </div>
-                              )}
 
-                              <div className="text-left font-mono space-y-0.5">
-                                <p className="text-xs font-bold text-zinc-100">{matchedEmployee.name}</p>
-                                <p className="text-[10px] text-zinc-400">{matchedEmployee.role}</p>
-                                <p className="text-[9px] text-[#D4AF37]">DEPT: {matchedEmployee.department}</p>
-                                <div className="flex items-center gap-1.5 mt-1">
-                                  <span className="text-[8px] bg-emerald-950/60 text-emerald-400 px-1 py-0.2 rounded font-bold border border-emerald-800/30">
-                                    MATCH: {latestDet.confidence}%
-                                  </span>
-                                  <span className="text-[8px] bg-amber-950/60 text-amber-400 px-1 py-0.2 rounded font-bold border border-amber-800/30">
-                                    DIR: {latestDet.direction === "In" ? "ENTRANCE" : "EXIT"}
-                                  </span>
+                                {matchedEmployee.picture ? (
+                                  <img
+                                    src={matchedEmployee.picture}
+                                    alt={matchedEmployee.name}
+                                    className={`w-12 h-12 rounded-lg object-cover border ${
+                                      (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "border-purple-500/50 filter saturate-150 contrast-125" :
+                                      (cameraStreamModes[cameraName] || "analytics") === "night" ? "border-emerald-500/50 filter grayscale contrast-150 brightness-75 text-emerald-500" :
+                                      "border-amber-500/50"
+                                    }`}
+                                    referrerPolicy="no-referrer"
+                                  />
+                                ) : (
+                                  <div className={`w-12 h-12 rounded-lg bg-gradient-to-br ${matchedEmployee.avatarColor} text-white font-extrabold flex items-center justify-center text-sm border ${
+                                    (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "border-purple-500/50" :
+                                    (cameraStreamModes[cameraName] || "analytics") === "night" ? "border-emerald-500/50" :
+                                    "border-amber-500/50"
+                                  }`}>
+                                    {matchedEmployee.avatar}
+                                  </div>
+                                )}
+
+                                <div className="text-left font-mono space-y-0.5">
+                                  <p className="text-xs font-bold text-zinc-100">{matchedEmployee.name}</p>
+                                  <p className="text-[10px] text-zinc-400">{matchedEmployee.role}</p>
+                                  <p className="text-[9px] text-[#D4AF37]">DEPT: {matchedEmployee.department}</p>
+                                  <div className="flex items-center gap-1.5 mt-1">
+                                    <span className={`text-[8px] px-1 py-0.2 rounded font-bold border ${
+                                      (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "bg-purple-950/60 text-purple-400 border-purple-800/30" :
+                                      (cameraStreamModes[cameraName] || "analytics") === "night" ? "bg-emerald-950/60 text-emerald-400 border-emerald-800/30" :
+                                      "bg-emerald-950/60 text-emerald-400 px-1 py-0.2 rounded font-bold border border-emerald-800/30"
+                                    }`}>
+                                      MATCH: {latestDet.confidence}%
+                                    </span>
+                                    <span className={`text-[8px] px-1 py-0.2 rounded font-bold border ${
+                                      (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "bg-purple-950/60 text-purple-400 border-purple-800/30" :
+                                      (cameraStreamModes[cameraName] || "analytics") === "night" ? "bg-emerald-950/60 text-emerald-400 border-emerald-800/30" :
+                                      "bg-amber-950/60 text-amber-400 px-1 py-0.2 rounded font-bold border border-amber-800/30"
+                                    }`}>
+                                      DIR: {latestDet.direction === "In" ? "ENTRANCE" : "EXIT"}
+                                    </span>
+                                  </div>
                                 </div>
                               </div>
                             </div>
-                          </div>
-                        ) : (
-                          /* Idle Scan screen */
-                          <div className="text-center space-y-2 pointer-events-none">
-                            <div className="w-12 h-12 bg-emerald-950/30 border border-emerald-500/30 text-emerald-500 flex items-center justify-center rounded-full mx-auto animate-pulse">
-                              <Eye className="w-6 h-6" />
+                          ) : (
+                            /* Idle Scan screen */
+                            <div className="text-center space-y-2 pointer-events-none">
+                              <div className={`w-12 h-12 flex items-center justify-center rounded-full mx-auto animate-pulse border ${
+                                (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "bg-purple-950/30 border-purple-500/30 text-purple-400" :
+                                (cameraStreamModes[cameraName] || "analytics") === "night" ? "bg-emerald-950/30 border-emerald-500/30 text-emerald-400" :
+                                "bg-emerald-950/30 border-emerald-500/30 text-emerald-500"
+                              }`}>
+                                {((cameraStreamModes[cameraName] || "analytics") === "thermal" ? (
+                                  <Flame className="w-6 h-6" />
+                                ) : (
+                                  <Eye className="w-6 h-6" />
+                                ))}
+                              </div>
+                              <p className={`text-xs font-mono uppercase tracking-widest font-semibold ${
+                                (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "text-purple-400" :
+                                (cameraStreamModes[cameraName] || "analytics") === "night" ? "text-emerald-400" :
+                                "text-emerald-500"
+                              }`}>
+                                FEED ACTIVE / STANDBY
+                              </p>
+                              <p className="text-[10px] font-mono text-zinc-500">
+                                {
+                                  (cameraStreamModes[cameraName] || "analytics") === "thermal" ? "Thermal edge-sensors operating. Ambient thermals stable." :
+                                  (cameraStreamModes[cameraName] || "analytics") === "night" ? "Infrared illuminators fully active. Spectral clarity calibrated." :
+                                  "Scanning parameters. Face detection module ready."
+                                }
+                              </p>
                             </div>
-                            <p className="text-xs font-mono text-emerald-500 uppercase tracking-widest font-semibold">FEED ACTIVE / STANDBY</p>
-                            <p className="text-[10px] font-mono text-zinc-500">Scanning parameters. Face detection module ready.</p>
-                          </div>
-                        )}
-                      </>
+                          )}
+                        </>
+                      )
                     ) : (
                       /* Offline Screen */
                       <div className="text-center space-y-3 z-10 px-6">

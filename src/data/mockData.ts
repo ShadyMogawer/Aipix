@@ -262,6 +262,7 @@ export const initialDetections: CameraDetection[] = [
   {
     id: "DET-101",
     timestamp: "15:30:00",
+    date: "2026-07-02",
     employeeId: "EMP-003",
     employeeName: "Sarah Al-Gamil",
     direction: "In",
@@ -272,6 +273,7 @@ export const initialDetections: CameraDetection[] = [
   {
     id: "DET-102",
     timestamp: "15:45:00",
+    date: "2026-07-02",
     employeeId: "EMP-005",
     employeeName: "Nour El-Din",
     direction: "Out",
@@ -282,6 +284,7 @@ export const initialDetections: CameraDetection[] = [
   {
     id: "DET-103",
     timestamp: "16:00:00",
+    date: "2026-07-02",
     employeeId: "EMP-002",
     employeeName: "John Carter",
     direction: "Out",
@@ -292,6 +295,7 @@ export const initialDetections: CameraDetection[] = [
   {
     id: "DET-104",
     timestamp: "16:00:10",
+    date: "2026-07-02",
     employeeId: "EMP-003",
     employeeName: "Sarah Al-Gamil",
     direction: "Out",
@@ -300,3 +304,88 @@ export const initialDetections: CameraDetection[] = [
     cameraName: "Vault Corridor CAM-04",
   },
 ];
+
+/**
+ * Computes working minutes for a single interval with full date awareness.
+ *
+ * - Closed intervals: uses pre-computed durationMinutes (accurate, handles cross-midnight).
+ * - Open interval on TODAY: uses simulatedTime as the running exit.
+ * - Open interval on a PAST date: caps at 16 hours from entry (best estimate; flagged as estimated).
+ */
+export const getIntervalDurationDateAware = (
+  interval: {
+    enterTime: string;
+    exitTime: string | null;
+    enterDate?: string;
+    crossesMidnight?: boolean;
+    durationMinutes?: number;
+  },
+  logDate: string,
+  todayDate: string,
+  simulatedTime: string
+): number => {
+  // Closed interval — trust the pre-computed value from the sync builder
+  if (interval.exitTime !== null && interval.durationMinutes && interval.durationMinutes > 0) {
+    return interval.durationMinutes;
+  }
+
+  // Closed interval without pre-computed value (e.g. mock data)
+  if (interval.exitTime !== null) {
+    const enterMins = timeToMinutes(interval.enterTime);
+    const exitMins = timeToMinutes(interval.exitTime);
+    if (interval.crossesMidnight || exitMins < enterMins) {
+      return (1440 - enterMins) + exitMins;
+    }
+    return Math.max(0, exitMins - enterMins);
+  }
+
+  // Open interval (no exit recorded)
+  const effectiveDate = interval.enterDate || logDate;
+  const enterMins = timeToMinutes(interval.enterTime);
+
+  if (effectiveDate >= todayDate) {
+    // Current day — use simulatedTime as the live running exit
+    const simMins = timeToMinutes(simulatedTime);
+    if (simMins >= enterMins) return simMins - enterMins;
+    // Crossed midnight during current session
+    const elapsed = (1440 - enterMins) + simMins;
+    return elapsed <= 960 ? elapsed : 0;
+  } else {
+    // Past date with no recorded exit — estimate: cap at 16 h from entry
+    return Math.min(1439 - enterMins, 960);
+  }
+};
+
+/**
+ * Computes total working minutes for an employee (or any set of logs) across a date range.
+ *
+ * @param logs         All attendance logs for the employee.
+ * @param dateFrom     Period start (YYYY-MM-DD, inclusive).
+ * @param dateTo       Period end   (YYYY-MM-DD, inclusive).
+ * @param todayDate    Cairo calendar date of today (YYYY-MM-DD).
+ * @param simulatedTime Current simulated time "HH:MM" (used for open intervals today).
+ * @returns { totalMinutes, perDay } — total and a per-date breakdown.
+ */
+export const computeEmployeeWorkMinutes = (
+  logs: AttendanceLog[],
+  dateFrom: string,
+  dateTo: string,
+  todayDate: string,
+  simulatedTime: string
+): { totalMinutes: number; perDay: Record<string, number> } => {
+  const perDay: Record<string, number> = {};
+
+  const filteredLogs = logs.filter(log => log.date >= dateFrom && log.date <= dateTo);
+
+  for (const log of filteredLogs) {
+    let dayMins = 0;
+    for (const interval of log.intervals) {
+      dayMins += getIntervalDurationDateAware(interval, log.date, todayDate, simulatedTime);
+    }
+    perDay[log.date] = (perDay[log.date] || 0) + dayMins;
+  }
+
+  const totalMinutes = Object.values(perDay).reduce((a, b) => a + b, 0);
+  return { totalMinutes, perDay };
+};
+

@@ -17,7 +17,10 @@ export interface AttendanceInterval {
   id: string;
   enterTime: string; // "HH:MM" 24h format
   exitTime: string | null; // "HH:MM" or null for currently checked in
-  durationMinutes: number; // computed helper
+  enterDate?: string; // "YYYY-MM-DD" — calendar date of entry (populated by API sync)
+  exitDate?: string; // "YYYY-MM-DD" — calendar date of exit (differs from enterDate for night shifts)
+  crossesMidnight?: boolean; // true when the interval spans midnight into the next calendar day
+  durationMinutes: number; // pre-computed helper (accurate for closed intervals)
 }
 
 export interface AttendanceLog {
@@ -41,6 +44,7 @@ export interface OfficeLocation {
 export interface CameraDetection {
   id: string;
   timestamp: string; // "HH:MM:SS"
+  date?: string; // "YYYY-MM-DD" — Cairo calendar date of this detection event
   employeeId: string;
   employeeName: string;
   direction: "In" | "Out";
