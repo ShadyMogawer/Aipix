@@ -1,0 +1,182 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import express from "express";
+import path from "path";
+import { createServer as createViteServer } from "vite";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+async function startServer() {
+  const app = express();
+  const PORT = 3000;
+
+  // Middleware for parsing JSON requests
+  app.use(express.json());
+
+  // Proxy endpoint to retrieve events from AIPix API securely
+  app.get("/api/aipix/events", async (req, res) => {
+    try {
+      const { from, to, dir = "desc", similarity_form = "80" } = req.query;
+
+      // Extract details from query params
+      const fromDate = typeof from === "string" ? from : "2026-07-02";
+      const toDate = typeof to === "string" ? to : "2026-07-02";
+
+      // Helper to convert date strings to Y-m-dTH:i:sZ (required ISO format with Z timezone)
+      const formatToAIPixDate = (dateStr: string, timeSuffix: string) => {
+        // If it already contains T and ends with Z, return as is
+        if (dateStr.includes("T") && dateStr.endsWith("Z")) {
+          return dateStr;
+        }
+
+        // If it includes T but has an offset like +00:00, replace the offset with Z
+        if (dateStr.includes("T")) {
+          return dateStr.replace(/[-+]\d{2}:\d{2}$/, "Z").replace(/\+\d{4}$/, "Z");
+        }
+
+        // Ensure format: YYYY-MM-DD
+        const match = dateStr.match(/^\d{4}-\d{2}-\d{2}$/);
+        if (match) {
+          return `${dateStr}T${timeSuffix}Z`;
+        }
+        return dateStr;
+      };
+
+      const fromFormatted = formatToAIPixDate(fromDate, "00:00:00");
+      const toFormatted = formatToAIPixDate(toDate, "23:59:59");
+
+      const targetUrl = new URL("https://aipix.gsd-me.com/api/v1/analytic-case/events");
+      targetUrl.searchParams.append("from", fromFormatted);
+      targetUrl.searchParams.append("to", toFormatted);
+      targetUrl.searchParams.append("dir", typeof dir === "string" ? dir : "desc");
+      targetUrl.searchParams.append("similarity_form", typeof similarity_form === "string" ? similarity_form : "80");
+
+      const token = process.env.AIPIX_BEARER_TOKEN || 
+        "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiNGE1MGVmMGI5NGMwMDBlNjg3OTNjYmJiMTY0MGIxOWNmOTFkZTg4M2E5YmE4MTNmNzA3NjZlYjU1YTk5ZjBmNGRjYTAxYTcwNGNhODE0MzQiLCJpYXQiOjE3ODMwMTIyODkuNzA2MDk1LCJuYmYiOjE3ODMwMTIyODkuNzA2MTAyLCJleHAiOjE3ODU2OTA2ODYuMDEwNDkxLCJzdWIiOiI2Iiwic2NvcGVzIjpbXX0.SPHNy1sKRIglEqLEQ17ZKJCeYbtsfitmhPaBZuunMxRiJeY9cpqc5aaPAY4ea-6Kigb3mP8sZnD_M3A9URQ9kiNgbtQc6qhivq5bjpjOCMFeHU6qKvQwWZ-16WGC1omeUQysi8eqywQnHfEQ1uShkSqXT96lraSv53d4FAKxKYHqMx22TaWQVKGQvmQnBhgnMykZlKw0dYUz8A8VE2FjByFEA1IfbRwwwAUJHs2fXxlX98ra0-HIlyZ0DLu51aEVHK4noEZnGYKsY0YZvqxDFJ-_g2oBR_cd5yANI0Z2LBEKbysre-UIWrLyRUwzgeEF_-PDA32glDNIzLfoBTqBhWmLvsFSythPNXtOqzKbkRLtaPj0b4g2yPDYQtNoRZMn6e_RpYGNN_EWcCrnZNFMc7hCCROCVU6m12eObRRpEkagwWAfIdZ8UrgUB3eIlcP0I9Ri9WK-GGDOoid1kuGZ1STBZj_vcvWMxSR1PdUSjYyOQxKKHyMeCzGUA2xUh-QO8d8jsE0_3zWt2xFLInxtxR_tp3MF2VJ38ub2N_R31nt3OiFobsEV7_o9ZiLLFrTODe1Y8AEkKuExGUTOVu2Rt2IIUeN38HsxVOEkC3qIuLFx35Kur3AwkJfUpUGg-KY9nKSKnn5VwS41G1TMHsn3CDm7TtPQPHWdbxJw8BROLxVI";
+
+      console.log(`[AIPix Proxy] Fetching events from: ${targetUrl.toString()}`);
+
+      const response = await fetch(targetUrl.toString(), {
+        method: "GET",
+        headers: {
+          "Accept": "application/json",
+          "Authorization": `Bearer ${token}`
+        }
+      });
+
+      const responseData = await response.json();
+
+      if (!response.ok) {
+        console.error(`[AIPix Proxy] API returned error ${response.status}:`, responseData);
+        return res.status(response.status).json({
+          success: false,
+          status: response.status,
+          message: responseData.message || "Error fetching events from AIPix API",
+          data: responseData
+        });
+      }
+
+      console.log(`[AIPix Proxy] Successfully fetched events. Count: ${Array.isArray(responseData.data) ? responseData.data.length : (responseData.data ? 'object' : 'unknown')}`);
+      return res.json({
+        success: true,
+        data: responseData
+      });
+    } catch (error: any) {
+      console.error("[AIPix Proxy] Exception during fetch proxy:", error);
+      return res.status(500).json({
+        success: false,
+        message: error.message || "Internal Server Error in AIPix Proxy"
+      });
+    }
+  });
+
+  // Proxy endpoint to retrieve all registered employees from AIPix API securely
+  app.get("/api/aipix/employees", async (req, res) => {
+    try {
+      const token = process.env.AIPIX_BEARER_TOKEN || 
+        "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiNGE1MGVmMGI5NGMwMDBlNjg3OTNjYmJiMTY0MGIxOWNmOTFkZTg4M2E5YmE4MTNmNzA3NjZlYjU1YTk5ZjBmNGRjYTAxYTcwNGNhODE0MzQiLCJpYXQiOjE3ODMwMTIyODkuNzA2MDk1LCJuYmYiOjE3ODMwMTIyODkuNzA2MTAyLCJleHAiOjE3ODU2OTA2ODYuMDEwNDkxLCJzdWIiOiI2Iiwic2NvcGVzIjpbXX0.SPHNy1sKRIglEqLEQ17ZKJCeYbtsfitmhPaBZuunMxRiJeY9cpqc5aaPAY4ea-6Kigb3mP8sZnD_M3A9URQ9kiNgbtQc6qhivq5bjpjOCMFeHU6qKvQwWZ-16WGC1omeUQysi8eqywQnHfEQ1uShkSqXT96lraSv53d4FAKxKYHqMx22TaWQVKGQvmQnBhgnMykZlKw0dYUz8A8VE2FjByFEA1IfbRwwwAUJHs2fXxlX98ra0-HIlyZ0DLu51aEVHK4noEZnGYKsY0YZvqxDFJ-_g2oBR_cd5yANI0Z2LBEKbysre-UIWrLyRUwzgeEF_-PDA32glDNIzLfoBTqBhWmLvsFSythPNXtOqzKbkRLtaPj0b4g2yPDYQtNoRZMn6e_RpYGNN_EWcCrnZNFMc7hCCROCVU6m12eObRRpEkagwWAfIdZ8UrgUB3eIlcP0I9Ri9WK-GGDOoid1kuGZ1STBZj_vcvWMxSR1PdUSjYyOQxKKHyMeCzGUA2xUh-QO8d8jsE0_3zWt2xFLInxtxR_tp3MF2VJ38ub2N_R31nt3OiFobsEV7_o9ZiLLFrTODe1Y8AEkKuExGUTOVu2Rt2IIUeN38HsxVOEkC3qIuLFx35Kur3AwkJfUpUGg-KY9nKSKnn5VwS41G1TMHsn3CDm7TtPQPHWdbxJw8BROLxVI";
+
+      console.log(`[AIPix Proxy] Fetching events from page 1 to 5 to extract all employees...`);
+
+      const pagePromises = [1, 2, 3, 4, 5].map(async (page) => {
+        const pageUrl = new URL("https://aipix.gsd-me.com/api/v1/analytic-case/events");
+        pageUrl.searchParams.append("from", "2025-01-01T00:00:00Z");
+        pageUrl.searchParams.append("to", "2026-12-31T23:59:59Z");
+        pageUrl.searchParams.append("dir", "desc");
+        pageUrl.searchParams.append("per_page", "100");
+        pageUrl.searchParams.append("page", String(page));
+
+        try {
+          const response = await fetch(pageUrl.toString(), {
+            method: "GET",
+            headers: {
+              "Accept": "application/json",
+              "Authorization": `Bearer ${token}`
+            }
+          });
+          if (!response.ok) return [];
+          const responseData = await response.json();
+          return Array.isArray(responseData.data) ? responseData.data : (responseData.data?.data || []);
+        } catch (e) {
+          console.error(`[AIPix Proxy] Failed fetching page ${page}:`, e);
+          return [];
+        }
+      });
+
+      const pagesResults = await Promise.all(pagePromises);
+      const events = pagesResults.flat();
+
+      const uniqueEmployeesMap = new Map<string, any>();
+
+      for (const event of events) {
+        if (event.analytic_file && event.analytic_file.id) {
+          const empId = String(event.analytic_file.id);
+          if (!uniqueEmployeesMap.has(empId)) {
+            uniqueEmployeesMap.set(empId, event.analytic_file);
+          }
+        }
+      }
+
+      const employeesList = Array.from(uniqueEmployeesMap.values());
+      console.log(`[AIPix Proxy] Successfully extracted ${employeesList.length} unique employees from ${events.length} events across 5 pages.`);
+
+      return res.json({
+        success: true,
+        data: employeesList
+      });
+    } catch (error: any) {
+      console.error("[AIPix Proxy] Exception during fetch proxy:", error);
+      return res.status(500).json({
+        success: false,
+        message: error.message || "Internal Server Error in AIPix Proxy"
+      });
+    }
+  });
+
+  // Vite middleware for development
+  if (process.env.NODE_ENV !== "production") {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+    console.log("[Server] Loaded Vite dev middleware");
+  } else {
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+    console.log("[Server] Serving compiled production files from /dist");
+  }
+
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`[Server] Core Service active on http://0.0.0.0:${PORT}`);
+  });
+}
+
+startServer();

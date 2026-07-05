@@ -1,0 +1,8 @@
+{
+  "name": "Remix: AIPix Attendance Insights",
+  "description": "An interactive, high-fidelity workplace attendance and security dashboard reflecting AIPix.ai real-time camera tracking. Features automatic cumulative duration calculations, multi-site analytics, hourly headcount charts, and real-time FTE evaluation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
