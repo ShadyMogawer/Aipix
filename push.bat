@@ -1,5 +1,5 @@
 @echo off
-echo Pushing changes to GitHub repository (https://github.com/shadyMogawer/aipix)...
+echo Pushing changes to GitHub repository (https://github.com/shadyMogawer/Aipix)...
 "%USERPROFILE%\.gemini\antigravity\git\cmd\git.exe" push -u origin main
 if %errorlevel% neq 0 (
     echo.
@@ -9,7 +9,7 @@ if %errorlevel% neq 0 (
 ) else (
     echo.
     echo Successfully published! You can view it here:
-    echo https://github.com/shadyMogawer/aipix
+    echo https://github.com/shadyMogawer/Aipix
     echo.
 )
 pause
