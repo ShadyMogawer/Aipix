@@ -1,6 +1,6 @@
 @echo off
-echo Pushing changes to GitHub repository (https://github.com/shadyMogawer/Aipix)...
-"%USERPROFILE%\.gemini\antigravity\git\cmd\git.exe" push -u origin main
+echo Pushing changes to GitHub repository (https://github.com/shadyMogawer/Aipix) with force push...
+"%USERPROFILE%\.gemini\antigravity\git\cmd\git.exe" push -u origin main --force
 if %errorlevel% neq 0 (
     echo.
     echo Git push failed. If this is a new repository, make sure you created it on GitHub first:
