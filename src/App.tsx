@@ -453,8 +453,7 @@ export default function App() {
           if (match) timeFormatted = `${match[1]}:${match[2]}:00`;
         }
 
-        const cameraName = evt.camera?.pretty_name || evt.camera?.name || evt.camera_name || evt.camera || "BTC_GATE_A_CAM";
-        const locationId = selectedLocationId;
+        const camNameStr = String(evt.camera_name || evt.camera?.name || evt.camera || `Camera ${cameraId || 1}`);
 
         newDetections.push({
           id: evt.id ? String(evt.id) : `DET-${Math.random()}`,
@@ -463,9 +462,10 @@ export default function App() {
           employeeId: emp.id,
           employeeName: emp.name,
           direction,
-          locationId,
+          locationId: selectedLocationId,
           confidence,
-          cameraName
+          cameraName: camNameStr,
+          cameraId: cameraId,
         });
       });
 
@@ -667,8 +667,9 @@ export default function App() {
   const [newEmpRole, setNewEmpRole] = useState("");
   const [newEmpDept, setNewEmpDept] = useState("Operations Control");
 
-  // Filter notifications console
+  // Terminal view state
   const [terminalFilter, setTerminalFilter] = useState<"ALL" | "IN" | "OUT">("ALL");
+  const [terminalVisibleCount, setTerminalVisibleCount] = useState<number>(20);
 
   // Unique key generators
   const generateId = (prefix: string) => `${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -1378,22 +1379,32 @@ export default function App() {
                 {terminalListFiltered.length === 0 ? (
                   <p className="text-zinc-500 italic text-center py-10">No activities parsed in this scope yet.</p>
                 ) : (
-                  terminalListFiltered.map((d, index) => (
-                    <div
-                      key={d.id}
-                      className={`flex items-start gap-2 py-1 ${
-                        index === 0 ? "text-[#D4AF37] font-semibold" : "text-zinc-450 text-zinc-400"
-                      }`}
-                    >
-                      <span className="text-zinc-600">[{d.timestamp}]</span>
-                      <span>
-                        {d.direction === "In" ? "📥" : "📤"}{" "}
-                        <strong className={index === 0 ? "text-zinc-100" : "text-zinc-300"}>{d.employeeName}</strong>{" "}
-                        {d.direction === "In" ? "entered" : "exited"}{" "}
-                        <span className="text-zinc-500">{d.cameraName}</span> (Conf: {d.confidence}%)
-                      </span>
-                    </div>
-                  ))
+                  <>
+                    {terminalListFiltered.slice(0, terminalVisibleCount).map((d, index) => (
+                      <div
+                        key={d.id}
+                        className={`flex items-start gap-2 py-1 ${
+                          index === 0 ? "text-[#D4AF37] font-semibold" : "text-zinc-450 text-zinc-400"
+                        }`}
+                      >
+                        <span className="text-zinc-600">[{d.timestamp}]</span>
+                        <span>
+                          {d.direction === "In" ? "📥" : "📤"}{" "}
+                          <strong className={index === 0 ? "text-zinc-100" : "text-zinc-300"}>{d.employeeName}</strong>{" "}
+                          {d.direction === "In" ? "entered" : "exited"}{" "}
+                          <span className="text-zinc-500">{d.cameraName}</span> (Conf: {d.confidence}%)
+                        </span>
+                      </div>
+                    ))}
+                    {terminalListFiltered.length > terminalVisibleCount && (
+                      <button
+                        onClick={() => setTerminalVisibleCount(terminalListFiltered.length)}
+                        className="w-full mt-3 py-1.5 text-xs font-mono font-bold bg-zinc-900 hover:bg-zinc-800 text-[#A9853B] rounded-lg transition-colors border border-zinc-800 cursor-pointer text-center"
+                      >
+                        READ MORE ({terminalListFiltered.length - terminalVisibleCount} remaining events)
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
             </div>

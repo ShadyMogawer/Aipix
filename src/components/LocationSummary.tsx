@@ -581,6 +581,16 @@ export default function LocationSummary({
                   const status = checkCameraStatus(cameraName);
                   const lastActivity = getCameraLastActivity(cameraName);
                   const camIdx = camerasForLocation.indexOf(cameraName) + 1;
+
+                  // Find actual camera ID from detections
+                  const matchingDet = detections.find(d => {
+                    if (d.locationId !== selectedLocationId) return false;
+                    const detCam = d.cameraName.toLowerCase();
+                    const targetCam = cameraName.toLowerCase();
+                    return detCam.includes(targetCam) || targetCam.includes(detCam);
+                  });
+                  const actualCameraId = matchingDet?.cameraId;
+
                   const baseIP = activeLocation.ipAddress || "192.168.10.100";
                   const ipParts = baseIP.split(".");
                   const cameraIP = ipParts.length === 4 ? `${ipParts[0]}.${ipParts[1]}.${ipParts[2]}.${100 + camIdx}` : baseIP;
@@ -662,10 +672,23 @@ export default function LocationSummary({
                           <span className="text-zinc-400">{status.text}</span>
                         </div>
 
-                        <div className="flex justify-between items-center text-[9px] font-mono text-zinc-500 border-t border-zinc-850/50 pt-1.5 mt-1">
+                        {/* Inline Live Stream preview */}
+                        {status.isOnline && (
+                          <div className="w-full aspect-video rounded-lg overflow-hidden border border-zinc-800/80 bg-zinc-950/80 mt-2 pointer-events-none">
+                            <iframe
+                              src={`https://aipix.gsd-me.com/cam${actualCameraId ? `?cameraId=${actualCameraId}` : ''}`}
+                              className="w-full h-full border-none opacity-80 group-hover:opacity-100 transition-opacity"
+                              title={`Live Feed ${cameraName}`}
+                              allow="autoplay; encrypted-media"
+                              tabIndex={-1}
+                            />
+                          </div>
+                        )}
+
+                        <div className="flex justify-between items-center text-[9px] font-mono text-zinc-500 border-t border-zinc-850/50 pt-1.5 mt-2">
                           <span>Scans parsed: <strong className="text-zinc-300">{totalScans}</strong></span>
                           <span className="text-[#A9853B] font-semibold flex items-center gap-1 group-hover:underline">
-                            <Eye className="w-2.5 h-2.5" /> View Feed
+                            <Eye className="w-2.5 h-2.5" /> Full View
                           </span>
                         </div>
                       </div>
@@ -746,6 +769,9 @@ export default function LocationSummary({
           const targetCam = cameraName.toLowerCase();
           return detCam.includes(targetCam) || targetCam.includes(detCam);
         });
+        
+        const actualCameraId = camDets.length > 0 ? camDets[0].cameraId : undefined;
+        
         const latestDet = camDets.length > 0 
           ? [...camDets].sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0] 
           : null;
@@ -822,14 +848,15 @@ export default function LocationSummary({
                     
                     {status.isOnline && (
                       <div className="flex items-center gap-1 p-1 bg-zinc-950 rounded-xl border border-zinc-850">
-                        {(["analytics", "thermal", "night", "raw"] as const).map((mode) => {
+                        {(["analytics", "thermal", "night", "raw", "vms"] as const).map((mode) => {
                           const activeMode = cameraStreamModes[cameraName] || "analytics";
                           const isSelected = activeMode === mode;
                           const labels: Record<string, string> = {
                             analytics: "AI Analytics",
                             thermal: "FLIR Thermal",
                             night: "IR Night",
-                            raw: "Raw Feed"
+                            raw: "Raw Feed",
+                            vms: "VMS Live"
                           };
                           
                           return (
@@ -889,7 +916,7 @@ export default function LocationSummary({
                     }`}></div>                    {status.isOnline ? (
                       (cameraStreamModes[cameraName] || "analytics") === "vms" ? (
                         <iframe
-                          src="https://aipix.gsd-me.com/cam"
+                          src={`https://aipix.gsd-me.com/cam${actualCameraId ? `?cameraId=${actualCameraId}` : ''}`}
                           className="w-full h-full border-none bg-[#111]"
                           title="AIPix Live VMS Portal"
                           allow="autoplay; encrypted-media"

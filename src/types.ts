@@ -51,6 +51,7 @@ export interface CameraDetection {
   locationId: string;
   confidence: number; // e.g., 98.4
   cameraName: string;
+  cameraId?: number;
 }
 
 export interface HourlyHeadcount {
