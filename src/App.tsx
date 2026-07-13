@@ -295,7 +295,7 @@ export default function App() {
           setEmployees(newEmployees);
         }
         setApiSyncSuccess(true);
-        setApiSyncError(`No real camera events fetched from AIPix servers for date range ${dateFrom} to ${dateTo}.`);
+        setApiSyncError(`Connected successfully, but no camera events were recorded for ${dateFrom === dateTo ? dateFrom : `${dateFrom} to ${dateTo}`}. Showing offline/simulated data.`);
         setIsLoadingEvents(false);
         return;
       }
@@ -1261,10 +1261,7 @@ export default function App() {
             <div className="flex items-start gap-2.5 p-3.5 bg-amber-950/20 border border-amber-900/30 text-amber-200 rounded-xl text-xs">
               <CircleAlert className="w-4 h-4 text-[#A9853B] shrink-0 mt-0.5" />
               <div>
-                <span className="font-bold">AIPix API Status Alert:</span> {apiSyncError}
-                <div className="text-[10px] text-amber-400/90 mt-1">
-                  Note: The server-side token returned a 401 challenge (expired or unauthorized). To keep the Bullion Trading Center (BTC) dashboard fully functional for audit purposes, we have gracefully loaded our high-fidelity, offline-cached simulated camera events instead.
-                </div>
+                <span className="font-bold">AIPix API Status Notice:</span> {apiSyncError}
               </div>
             </div>
           )}
