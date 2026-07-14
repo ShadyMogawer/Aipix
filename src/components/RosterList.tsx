@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useMemo } from "react";
-import { Users, UserCheck, UserX, Calendar, ChevronDown, ChevronUp, Trash2, Clock, Search, ExternalLink, FileText, Moon, AlertCircle } from "lucide-react";
+import { Users, UserCheck, UserX, Calendar, ChevronDown, ChevronUp, Clock, Search, ExternalLink, FileText, Moon, AlertCircle } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Employee, AttendanceLog, OfficeLocation } from "../types";
 import {
@@ -660,14 +660,6 @@ export default function RosterList({
                                                 {formatMinutesToDuration(dur)}
                                               </span>
                                             )}
-                                            <button
-                                              onClick={() => onDeleteInterval(emp.id, interval.id)}
-                                              className="p-1.5 hover:text-rose-400 hover:bg-rose-950/30 text-zinc-500 rounded transition-all cursor-pointer"
-                                              title="Delete attendance interval segment"
-                                              id={`delete-int-${interval.id}`}
-                                            >
-                                              <Trash2 className="w-3.5 h-3.5" />
-                                            </button>
                                           </div>
                                         </div>
                                       );
