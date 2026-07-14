@@ -319,11 +319,15 @@ export const getIntervalDurationDateAware = (
     enterDate?: string;
     crossesMidnight?: boolean;
     durationMinutes?: number;
+    missingIn?: boolean;
   },
   logDate: string,
   todayDate: string,
   simulatedTime: string
 ): number => {
+  // Missing IN log — Out-only detection, no working time should be counted
+  if (interval.missingIn) return 0;
+
   // Closed interval — trust the pre-computed value from the sync builder
   if (interval.exitTime !== null && interval.durationMinutes && interval.durationMinutes > 0) {
     return interval.durationMinutes;

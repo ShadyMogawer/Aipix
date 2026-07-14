@@ -307,6 +307,12 @@ export default function RosterList({
               // Night shift flag — any cross-midnight interval in the period
               const hasNightShift = allIntervals.some(iv => iv.crossesMidnight);
 
+              // Missing IN log — count orphan-exit intervals
+              const missingInCount = allIntervals.filter(iv => iv.missingIn).length;
+              const hasMissingIn   = missingInCount > 0;
+              // True when the employee also has valid (non-missingIn) intervals with recorded time
+              const hasNormalIntervals = cumulativeMinutes > 0;
+
               // Max minutes in period for bar scaling
               const maxDayMins = Math.max(...Object.values(perDay), fteHoursStandard * 60);
 
@@ -319,7 +325,11 @@ export default function RosterList({
                   exit={{ opacity: 0, y: -15 }}
                   transition={{ duration: 0.25, ease: "easeInOut" }}
                   className={`border rounded-xl transition-all ${
-                    isInside
+                    hasMissingIn && !hasNormalIntervals
+                      ? "bg-red-950/15 border-red-700/40 shadow-md shadow-red-950/10"
+                      : hasMissingIn && hasNormalIntervals
+                      ? "bg-orange-950/10 border-orange-700/30 shadow-md shadow-orange-950/5"
+                      : isInside
                       ? "bg-amber-950/10 border-[#A9853B]/30 shadow-md shadow-amber-950/5"
                       : "bg-zinc-900/30 border-zinc-800/80 hover:bg-zinc-900/50"
                   }`}
@@ -393,12 +403,25 @@ export default function RosterList({
                         <p className="text-xs font-semibold text-zinc-500 font-mono tracking-wider uppercase">
                           {isMultiDay ? "Period Total" : "Today's Time"}
                         </p>
-                        <p className="text-base font-bold text-[#D4AF37] font-serif mt-0.5">
-                          {cumulativeMinutes > 0 ? formatMinutesToDuration(cumulativeMinutes) : "—"}
+                        <p className={`text-base font-bold font-serif mt-0.5 ${
+                          hasMissingIn && !hasNormalIntervals ? "text-red-400" : "text-[#D4AF37]"
+                        }`}>
+                          {hasMissingIn && !hasNormalIntervals
+                            ? <span className="flex items-center gap-1.5"><AlertCircle className="w-3.5 h-3.5" />0 mins</span>
+                            : cumulativeMinutes > 0 ? formatMinutesToDuration(cumulativeMinutes) : "—"}
                         </p>
-                        <p className="text-[10px] text-zinc-400 font-mono mt-0.5">
-                          FTE: <span className="text-[#A9853B] font-semibold">{empFTE}</span>
-                        </p>
+                        {hasMissingIn && !hasNormalIntervals ? (
+                          <p className="text-[10px] text-red-500 font-mono mt-0.5 font-semibold">⚠ Missing IN log</p>
+                        ) : hasMissingIn && hasNormalIntervals ? (
+                          <p className="text-[10px] text-red-500 font-mono mt-0.5 font-semibold flex items-center gap-1">
+                            <AlertCircle className="w-2.5 h-2.5" />
+                            ({missingInCount} missing IN log{missingInCount > 1 ? "s" : ""})
+                          </p>
+                        ) : (
+                          <p className="text-[10px] text-zinc-400 font-mono mt-0.5">
+                            FTE: <span className="text-[#A9853B] font-semibold">{empFTE}</span>
+                          </p>
+                        )}
                       </div>
                       {isExpanded ? (
                         <ChevronUp className="w-4 h-4 text-zinc-400" />
@@ -450,10 +473,13 @@ export default function RosterList({
                               const mins = perDay[date] || 0;
                               const dayLog = logs.find(l => l.employeeId === emp.id && l.date === date);
                               const hasNight = dayLog?.intervals.some(iv => iv.crossesMidnight) || false;
-                              const isOpen  = dayLog?.intervals.some(iv => !iv.exitTime) || false;
+                              const isOpen  = dayLog?.intervals.some(iv => !iv.exitTime && !iv.missingIn) || false;
                               const isToday = date === effectiveTodayDate;
                               const barPct  = maxDayMins > 0 ? Math.min(100, (mins / maxDayMins) * 100) : 0;
                               const fteDay  = mins / (fteHoursStandard * 60);
+                              const dayMissingCount = dayLog?.intervals.filter(iv => iv.missingIn).length || 0;
+                              const dayHasNormal = mins > 0;
+                              const dayAllMissing = dayMissingCount > 0 && !dayHasNormal;
 
                               return (
                                 <div key={date} className="flex items-center gap-3 text-[11px] font-mono">
@@ -467,24 +493,38 @@ export default function RosterList({
                                     <div
                                       className={`h-full rounded-full transition-all ${
                                         mins === 0
-                                          ? "w-0"
+                                          ? dayAllMissing ? "bg-red-700/50 w-full" : "w-0"
                                           : hasNight
                                           ? "bg-indigo-500"
                                           : isToday && isOpen
                                           ? "bg-amber-400 animate-pulse"
                                           : "bg-[#A9853B]"
                                       }`}
-                                      style={{ width: `${barPct}%` }}
+                                      style={{ width: mins > 0 ? `${barPct}%` : dayAllMissing ? "100%" : "0%" }}
                                     />
                                   </div>
 
                                   {/* Duration */}
-                                  <span className={`w-[62px] text-right ${mins > 0 ? "text-zinc-200" : "text-zinc-600 italic"}`}>
-                                    {mins > 0 ? formatMinutesToDuration(mins) : "—"}
+                                  <span className={`w-[62px] text-right ${
+                                    mins > 0 ? "text-zinc-200" :
+                                    dayAllMissing ? "text-red-500 font-semibold" :
+                                    "text-zinc-600 italic"
+                                  }`}>
+                                    {mins > 0 ? formatMinutesToDuration(mins) : dayAllMissing ? "0 mins" : "—"}
                                   </span>
 
                                   {/* Badges */}
-                                  <div className="flex items-center gap-1 w-[90px]">
+                                  <div className="flex items-center gap-1 w-[100px]">
+                                    {dayAllMissing && (
+                                      <span className="flex items-center gap-0.5 text-red-500 text-[9px] font-bold">
+                                        <AlertCircle className="w-2.5 h-2.5" /> {dayMissingCount} MISSING IN
+                                      </span>
+                                    )}
+                                    {!dayAllMissing && dayMissingCount > 0 && (
+                                      <span className="flex items-center gap-0.5 text-red-500 text-[9px] font-bold">
+                                        <AlertCircle className="w-2.5 h-2.5" /> ({dayMissingCount})
+                                      </span>
+                                    )}
                                     {hasNight && (
                                       <span title="Night shift — crosses midnight" className="flex items-center gap-0.5 text-indigo-400 text-[9px] font-bold">
                                         <Moon className="w-2.5 h-2.5" /> NIGHT
@@ -493,7 +533,7 @@ export default function RosterList({
                                     {isToday && isOpen && (
                                       <span className="text-amber-400 text-[9px] font-bold animate-pulse">⏳ LIVE</span>
                                     )}
-                                    {mins > 0 && !hasNight && !isOpen && (
+                                    {mins > 0 && !hasNight && !isOpen && dayMissingCount === 0 && (
                                       <span className="text-zinc-600 text-[9px]">
                                         {Number(fteDay.toFixed(2))} FTE
                                       </span>
@@ -509,14 +549,25 @@ export default function RosterList({
                             {/* Totals row */}
                             <div className="border-t border-zinc-800 mt-2 pt-2 flex items-center justify-between text-[11px] font-mono">
                               <span className="text-zinc-500 uppercase tracking-wider">Period Total</span>
-                              <div className="flex items-center gap-4">
-                                <span className="text-[#D4AF37] font-bold text-sm">
-                                  {cumulativeMinutes > 0 ? formatMinutesToDuration(cumulativeMinutes) : "No records"}
+                              <div className="flex items-center gap-3 flex-wrap justify-end">
+                                <span className={`font-bold text-sm ${
+                                  hasMissingIn && !hasNormalIntervals ? "text-red-400" : "text-[#D4AF37]"
+                                }`}>
+                                  {hasNormalIntervals
+                                    ? formatMinutesToDuration(cumulativeMinutes)
+                                    : hasMissingIn ? "0 mins" : "No records"}
                                 </span>
-                                <span className="text-zinc-500">
-                                  = <span className="text-[#A9853B] font-semibold">{empFTE}</span> FTE
-                                  <span className="text-zinc-600 ml-1">({fteHoursStandard}h/shift)</span>
-                                </span>
+                                {hasMissingIn ? (
+                                  <span className="text-red-500 font-semibold flex items-center gap-1">
+                                    <AlertCircle className="w-2.5 h-2.5" />
+                                    ({missingInCount} missing IN log{missingInCount > 1 ? "s" : ""})
+                                  </span>
+                                ) : (
+                                  <span className="text-zinc-500">
+                                    = <span className="text-[#A9853B] font-semibold">{empFTE}</span> FTE
+                                    <span className="text-zinc-600 ml-1">({fteHoursStandard}h/shift)</span>
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -561,44 +612,65 @@ export default function RosterList({
                                         interval, log.date, effectiveTodayDate, simulatedTime
                                       );
                                       return (
-                                        <div
-                                          key={interval.id}
-                                          className="bg-zinc-900 px-3.5 py-2.5 rounded-lg border border-zinc-800/80 flex justify-between items-center text-xs text-zinc-300 font-mono shadow-3xs"
+                                        <div key={interval.id}
+                                          className={`px-3.5 py-2.5 rounded-lg border flex justify-between items-center text-xs font-mono shadow-3xs ${
+                                            interval.missingIn
+                                              ? "bg-red-950/20 border-red-700/40 text-red-300"
+                                              : "bg-zinc-900 border-zinc-800/80 text-zinc-300"
+                                          }`}
                                         >
                                           <div className="flex items-center gap-3 flex-wrap">
-                                            <span className="p-1 px-1.5 rounded bg-amber-950/40 text-[#A9853B] text-[10px] font-bold border border-[#A9853B]/20">
-                                              INTERVAL
-                                            </span>
-                                            <span>
-                                              In: <strong className="text-zinc-100">{interval.enterTime}</strong>
-                                            </span>
-                                            <span>•</span>
-                                            <span>
-                                              Out:{" "}
-                                              <strong className="text-zinc-100">
-                                                {interval.exitTime
-                                                  ? interval.crossesMidnight
-                                                    ? `${interval.exitTime} +1d`
-                                                    : interval.exitTime
-                                                  : "Active..."}
-                                              </strong>
-                                            </span>
-                                            {interval.crossesMidnight && (
-                                              <span className="flex items-center gap-0.5 text-indigo-400 text-[9px] font-bold">
-                                                <Moon className="w-2.5 h-2.5" /> NIGHT SHIFT
+                                            {interval.missingIn ? (
+                                              <span className="p-1 px-1.5 rounded bg-red-950/60 text-red-400 text-[10px] font-bold border border-red-700/40 flex items-center gap-1">
+                                                <AlertCircle className="w-3 h-3" /> MISSING IN
+                                              </span>
+                                            ) : (
+                                              <span className="p-1 px-1.5 rounded bg-amber-950/40 text-[#A9853B] text-[10px] font-bold border border-[#A9853B]/20">
+                                                INTERVAL
                                               </span>
                                             )}
-                                            {!interval.exitTime && log.date < effectiveTodayDate && (
-                                              <span className="flex items-center gap-1 text-amber-500 text-[9px] font-bold">
-                                                <AlertCircle className="w-2.5 h-2.5" /> EST. EXIT
-                                              </span>
+                                            {interval.missingIn ? (
+                                              <span className="text-red-400 font-semibold">Out only: <strong className="text-red-300">{interval.exitTime}</strong> — no IN log recorded</span>
+                                            ) : (
+                                              <>
+                                                <span>
+                                                  In: <strong className="text-zinc-100">{interval.enterTime}</strong>
+                                                </span>
+                                                <span>•</span>
+                                                <span>
+                                                  Out:{" "}
+                                                  <strong className="text-zinc-100">
+                                                    {interval.exitTime
+                                                      ? interval.crossesMidnight
+                                                        ? `${interval.exitTime} +1d`
+                                                        : interval.exitTime
+                                                      : "Active..."}
+                                                  </strong>
+                                                </span>
+                                                {interval.crossesMidnight && (
+                                                  <span className="flex items-center gap-0.5 text-indigo-400 text-[9px] font-bold">
+                                                    <Moon className="w-2.5 h-2.5" /> NIGHT SHIFT
+                                                  </span>
+                                                )}
+                                                {!interval.exitTime && log.date < effectiveTodayDate && (
+                                                  <span className="flex items-center gap-1 text-amber-500 text-[9px] font-bold">
+                                                    <AlertCircle className="w-2.5 h-2.5" /> EST. EXIT
+                                                  </span>
+                                                )}
+                                              </>
                                             )}
                                           </div>
 
                                           <div className="flex items-center gap-3">
-                                            <span className="text-[#D4AF37] font-bold bg-[#A9853B]/10 px-2 py-0.5 rounded text-[10px] border border-[#A9853B]/20">
-                                              {formatMinutesToDuration(dur)}
-                                            </span>
+                                            {interval.missingIn ? (
+                                              <span className="text-red-400 font-bold bg-red-950/40 px-2 py-0.5 rounded text-[10px] border border-red-700/30">
+                                                0 mins
+                                              </span>
+                                            ) : (
+                                              <span className="text-[#D4AF37] font-bold bg-[#A9853B]/10 px-2 py-0.5 rounded text-[10px] border border-[#A9853B]/20">
+                                                {formatMinutesToDuration(dur)}
+                                              </span>
+                                            )}
                                             <button
                                               onClick={() => onDeleteInterval(emp.id, interval.id)}
                                               className="p-1.5 hover:text-rose-400 hover:bg-rose-950/30 text-zinc-500 rounded transition-all cursor-pointer"

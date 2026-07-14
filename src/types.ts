@@ -21,6 +21,7 @@ export interface AttendanceInterval {
   exitDate?: string; // "YYYY-MM-DD" — calendar date of exit (differs from enterDate for night shifts)
   crossesMidnight?: boolean; // true when the interval spans midnight into the next calendar day
   durationMinutes: number; // pre-computed helper (accurate for closed intervals)
+  missingIn?: boolean; // true when only an Out was detected with no matching In — working time = 0
 }
 
 export interface AttendanceLog {
@@ -52,6 +53,7 @@ export interface CameraDetection {
   confidence: number; // e.g., 98.4
   cameraName: string;
   cameraId?: number;
+  eventFrameUrl?: string; // live camera snapshot URL from AIPix (event_frame_url field)
 }
 
 export interface HourlyHeadcount {

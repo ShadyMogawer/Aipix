@@ -114,14 +114,27 @@ export default function StaffDossier({
   const allIntervals = empLogs.flatMap(l => l.intervals);
   const hasNightShift = allIntervals.some(iv => iv.crossesMidnight);
 
+  // Missing IN stats
+  const missingInCount     = allIntervals.filter(iv => iv.missingIn).length;
+  const hasMissingIn       = missingInCount > 0;
+  const hasNormalIntervals = cumulativeMinutes > 0;
+
   const firstLog = empLogs[0];
   const lastLog  = empLogs[empLogs.length - 1];
-  const earliestCheckIn  = firstLog  ? `${shortDate(firstLog.date)} ${firstLog.intervals[0]?.enterTime || ""}`.trim() : "N/A";
+  // Skip missingIn intervals (no enterTime) for the first-entry display
+  const firstValidInterval = firstLog?.intervals.find(iv => !iv.missingIn);
+  const earliestCheckIn = firstLog
+    ? firstValidInterval
+      ? `${shortDate(firstLog.date)} ${firstValidInterval.enterTime}`.trim()
+      : `${shortDate(firstLog.date)} — (no IN log)`
+    : "N/A";
   const lastInterval     = lastLog   ? lastLog.intervals[lastLog.intervals.length - 1] : null;
   const latestCheckOut   = lastInterval
-    ? lastInterval.exitTime
-      ? `${shortDate(lastLog.date)} ${lastInterval.crossesMidnight ? `${lastInterval.exitTime} +1d` : lastInterval.exitTime}`
-      : "Still Inside"
+    ? lastInterval.missingIn
+      ? `${shortDate(lastLog.date)} ${lastInterval.exitTime} (exit only)`
+      : lastInterval.exitTime
+        ? `${shortDate(lastLog.date)} ${lastInterval.crossesMidnight ? `${lastInterval.exitTime} +1d` : lastInterval.exitTime}`
+        : "Still Inside"
     : "N/A";
 
   // Camera detections for this employee
@@ -231,12 +244,23 @@ export default function StaffDossier({
             <Clock className="w-3.5 h-3.5 text-[#A9853B]" />
             {isMultiDay ? "Period Total" : "Working Time"}
           </p>
-          <p className="text-2xl font-bold text-[#D4AF37] font-serif">
-            {cumulativeMinutes > 0 ? formatMinutesToDuration(cumulativeMinutes) : "No records"}
+          <p className={`text-2xl font-bold font-serif ${
+            hasMissingIn && !hasNormalIntervals ? "text-red-400" : "text-[#D4AF37]"
+          }`}>
+            {hasNormalIntervals
+              ? formatMinutesToDuration(cumulativeMinutes)
+              : hasMissingIn ? "0 mins" : "No records"}
           </p>
-          <p className="text-[10px] text-zinc-500 font-mono">
-            {isMultiDay ? `Across ${empLogs.length} day(s) with records` : "Accrued from scan triggers"}
-          </p>
+          {hasMissingIn ? (
+            <p className="text-[10px] text-red-500 font-mono flex items-center gap-1 font-semibold">
+              <AlertCircle className="w-3 h-3" />
+              {missingInCount} missing IN log{missingInCount > 1 ? "s" : ""} detected
+            </p>
+          ) : (
+            <p className="text-[10px] text-zinc-500 font-mono">
+              {isMultiDay ? `Across ${empLogs.length} day(s) with records` : "Accrued from scan triggers"}
+            </p>
+          )}
         </div>
 
         <div className="bg-zinc-900/60 border border-zinc-850 p-4 rounded-xl space-y-2">
@@ -327,10 +351,28 @@ export default function StaffDossier({
                             <Moon className="w-2.5 h-2.5" /> Night Shift
                           </span>
                         )}
+                        {(() => {
+                          const dayMissing = log.intervals.filter(iv => iv.missingIn).length;
+                          return dayMissing > 0 ? (
+                            <span className="flex items-center gap-0.5 text-red-500 text-[9px] font-bold">
+                              <AlertCircle className="w-2.5 h-2.5" />
+                              {dayMissing} missing IN
+                            </span>
+                          ) : null;
+                        })()}
                       </div>
-                      <span className="text-[10px] font-mono text-[#A9853B] font-bold">
-                        {formatMinutesToDuration(dayTotal)}
-                      </span>
+                      {/* Day total — red if all intervals are missing-IN */}
+                      {(() => {
+                        const dayMissing = log.intervals.filter(iv => iv.missingIn).length;
+                        const dayNormal  = dayTotal > 0;
+                        return dayMissing > 0 && !dayNormal ? (
+                          <span className="text-[10px] font-mono text-red-400 font-bold">0 mins</span>
+                        ) : (
+                          <span className="text-[10px] font-mono text-[#A9853B] font-bold">
+                            {formatMinutesToDuration(dayTotal)}
+                          </span>
+                        );
+                      })()}
                     </div>
 
                     {/* Intervals for this day */}
@@ -344,13 +386,23 @@ export default function StaffDossier({
                         return (
                           <div
                             key={interval.id}
-                            className="p-3 bg-zinc-900/60 border border-zinc-800 rounded-xl flex items-center justify-between text-xs font-mono text-zinc-300"
+                            className={`p-3 border rounded-xl flex items-center justify-between text-xs font-mono ${
+                              interval.missingIn
+                                ? "bg-red-950/20 border-red-700/40 text-red-300"
+                                : "bg-zinc-900/60 border-zinc-800 text-zinc-300"
+                            }`}
                           >
                             <div className="space-y-1">
                               <div className="flex items-center gap-2 flex-wrap">
-                                <span className="text-[9px] bg-amber-950/40 text-[#A9853B] font-bold px-1.5 py-0.5 rounded border border-[#A9853B]/20">
-                                  SEG {i + 1}
-                                </span>
+                                {interval.missingIn ? (
+                                  <span className="text-[9px] bg-red-950/60 text-red-400 font-bold px-1.5 py-0.5 rounded border border-red-700/40 flex items-center gap-1">
+                                    <AlertCircle className="w-2.5 h-2.5" /> MISSING IN
+                                  </span>
+                                ) : (
+                                  <span className="text-[9px] bg-amber-950/40 text-[#A9853B] font-bold px-1.5 py-0.5 rounded border border-[#A9853B]/20">
+                                    SEG {i + 1}
+                                  </span>
+                                )}
                                 {interval.crossesMidnight && (
                                   <span className="flex items-center gap-0.5 text-indigo-400 text-[9px] font-bold">
                                     <Moon className="w-2.5 h-2.5" /> +1 DAY
@@ -362,26 +414,38 @@ export default function StaffDossier({
                                   </span>
                                 )}
                               </div>
-                              <div className="mt-1 space-x-3">
-                                <span>In: <strong className="text-zinc-100">{interval.enterTime}</strong></span>
-                                <span>•</span>
-                                <span>
-                                  Out:{" "}
-                                  <strong className="text-zinc-100">
-                                    {interval.exitTime
-                                      ? interval.crossesMidnight
-                                        ? `${interval.exitTime} (next day)`
-                                        : interval.exitTime
-                                      : isOpenPast
-                                      ? "Not recorded (est.)"
-                                      : "Active..."}
-                                  </strong>
-                                </span>
-                              </div>
+                              {interval.missingIn ? (
+                                <div className="mt-1 text-red-400 font-semibold">
+                                  Out only: <strong className="text-red-300">{interval.exitTime}</strong> — no IN log recorded
+                                </div>
+                              ) : (
+                                <div className="mt-1 space-x-3">
+                                  <span>In: <strong className="text-zinc-100">{interval.enterTime}</strong></span>
+                                  <span>•</span>
+                                  <span>
+                                    Out:{" "}
+                                    <strong className="text-zinc-100">
+                                      {interval.exitTime
+                                        ? interval.crossesMidnight
+                                          ? `${interval.exitTime} (next day)`
+                                          : interval.exitTime
+                                        : isOpenPast
+                                        ? "Not recorded (est.)"
+                                        : "Active..."}
+                                    </strong>
+                                  </span>
+                                </div>
+                              )}
                             </div>
-                            <span className="bg-[#A9853B]/10 border border-[#A9853B]/20 text-[#D4AF37] px-2.5 py-1 rounded font-bold ml-3 shrink-0">
-                              {formatMinutesToDuration(duration)}
-                            </span>
+                            {interval.missingIn ? (
+                              <span className="bg-red-950/40 border border-red-700/30 text-red-400 px-2.5 py-1 rounded font-bold ml-3 shrink-0">
+                                0 mins
+                              </span>
+                            ) : (
+                              <span className="bg-[#A9853B]/10 border border-[#A9853B]/20 text-[#D4AF37] px-2.5 py-1 rounded font-bold ml-3 shrink-0">
+                                {formatMinutesToDuration(duration)}
+                              </span>
+                            )}
                           </div>
                         );
                       })}
@@ -395,13 +459,24 @@ export default function StaffDossier({
             {empLogs.length > 0 && (
               <div className="border-t border-zinc-800 pt-3 flex items-center justify-between text-xs font-mono">
                 <span className="text-zinc-500 uppercase tracking-wider">Grand Total</span>
-                <div className="flex items-center gap-3">
-                  <span className="text-[#D4AF37] font-bold text-sm">
-                    {formatMinutesToDuration(cumulativeMinutes)}
+                <div className="flex items-center gap-3 flex-wrap justify-end">
+                  <span className={`font-bold text-sm ${
+                    hasMissingIn && !hasNormalIntervals ? "text-red-400" : "text-[#D4AF37]"
+                  }`}>
+                    {hasNormalIntervals
+                      ? formatMinutesToDuration(cumulativeMinutes)
+                      : hasMissingIn ? "0 mins" : "—"}
                   </span>
-                  <span className="text-zinc-500">
-                    = <span className="text-[#A9853B] font-semibold">{empFTE}</span> FTE
-                  </span>
+                  {hasMissingIn ? (
+                    <span className="text-red-500 font-semibold flex items-center gap-1">
+                      <AlertCircle className="w-2.5 h-2.5" />
+                      ({missingInCount} missing IN log{missingInCount > 1 ? "s" : ""})
+                    </span>
+                  ) : (
+                    <span className="text-zinc-500">
+                      = <span className="text-[#A9853B] font-semibold">{empFTE}</span> FTE
+                    </span>
+                  )}
                 </div>
               </div>
             )}
@@ -430,24 +505,55 @@ export default function StaffDossier({
             ) : (
               <div className="divide-y divide-zinc-850">
                 {personalDetections.map(det => (
-                  <div key={det.id} className="py-2.5 flex items-center justify-between text-xs font-mono">
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-1.5">
-                        {det.date && det.date !== effectiveTodayDate && (
-                          <span className="text-zinc-600 text-[9px]">{shortDate(det.date)}</span>
-                        )}
-                        <span className="text-zinc-500">[{det.timestamp}]</span>
-                        <span className={det.direction === "In" ? "text-emerald-400" : "text-rose-400 font-bold"}>
-                          {det.direction === "In" ? "📥 ENTRANCE (IN)" : "📤 EXIT (OUT)"}
-                        </span>
+                  <div key={det.id} className="py-3 flex items-start gap-3 text-xs font-mono">
+                    {/* Camera snapshot thumbnail */}
+                    {det.eventFrameUrl ? (
+                      <a
+                        href={`/api/aipix/frame?url=${encodeURIComponent(det.eventFrameUrl)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="View full AIPix camera snapshot"
+                        className="shrink-0"
+                      >
+                        <img
+                          src={`/api/aipix/frame?url=${encodeURIComponent(det.eventFrameUrl)}`}
+                          alt={`Camera snapshot — ${det.employeeName} @ ${det.timestamp}`}
+                          className={`w-16 h-16 rounded-lg object-cover border-2 shadow-md transition-all hover:scale-105 hover:shadow-lg ${
+                            det.direction === "In"
+                              ? "border-emerald-600/60"
+                              : "border-rose-600/60"
+                          }`}
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = "none";
+                          }}
+                        />
+                      </a>
+                    ) : (
+                      <div className="shrink-0 w-16 h-16 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center">
+                        <span className="text-zinc-600 text-[9px] text-center font-sans leading-tight">No<br/>snap</span>
                       </div>
-                      <p className="text-[10.5px] text-zinc-400">
-                        Camera: <strong className="text-zinc-300">{det.cameraName}</strong>
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-[10px] text-zinc-500">Confidence</p>
-                      <p className="text-xs text-[#D4AF37] font-bold mt-0.5">{det.confidence}%</p>
+                    )}
+
+                    {/* Event info */}
+                    <div className="flex-1 flex items-start justify-between gap-2">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-1.5">
+                          {det.date && det.date !== effectiveTodayDate && (
+                            <span className="text-zinc-600 text-[9px]">{shortDate(det.date)}</span>
+                          )}
+                          <span className="text-zinc-500">[{det.timestamp}]</span>
+                          <span className={det.direction === "In" ? "text-emerald-400" : "text-rose-400 font-bold"}>
+                            {det.direction === "In" ? "📥 ENTRANCE (IN)" : "📤 EXIT (OUT)"}
+                          </span>
+                        </div>
+                        <p className="text-[10.5px] text-zinc-400">
+                          Camera: <strong className="text-zinc-300">{det.cameraName}</strong>
+                        </p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-[10px] text-zinc-500">Confidence</p>
+                        <p className="text-xs text-[#D4AF37] font-bold mt-0.5">{det.confidence}%</p>
+                      </div>
                     </div>
                   </div>
                 ))}

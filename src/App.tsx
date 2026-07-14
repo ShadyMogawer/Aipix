@@ -455,6 +455,9 @@ export default function App() {
 
         const camNameStr = String(evt.camera_name || evt.camera?.name || evt.camera || `Camera ${cameraId || 1}`);
 
+        // The event_frame_url is the actual camera snapshot taken at the moment of detection
+        const eventFrameUrl = String(evt.event_frame_url || evt.frame_url || evt.snapshot_url || evt.photo_url || "").trim() || undefined;
+
         newDetections.push({
           id: evt.id ? String(evt.id) : `DET-${Math.random()}`,
           timestamp: timeFormatted,
@@ -466,6 +469,7 @@ export default function App() {
           confidence,
           cameraName: camNameStr,
           cameraId: cameraId,
+          eventFrameUrl,
         });
       });
 
@@ -512,7 +516,7 @@ export default function App() {
         });
 
         // Build non-overlapping intervals using absolute minute arithmetic
-        const rawIntervals: { enterAbs: number; exitAbs: number | null }[] = [];
+        const rawIntervals: { enterAbs: number; exitAbs: number | null; missingIn?: boolean }[] = [];
 
         sortedDets.forEach(det => {
           const dayOff = _getDayOffset(dateFrom, det.date || dateFrom);
@@ -541,14 +545,10 @@ export default function App() {
             if (active) {
               active.exitAbs = Math.max(active.enterAbs, detAbsMins);
             } else {
-              // Orphan exit (missed the entry) — create a 60-min retrospective block
-              const lastClosed = rawIntervals.length > 0 ? rawIntervals[rawIntervals.length - 1] : null;
-              let enterAbs = Math.max(0, detAbsMins - 60);
-              if (lastClosed && lastClosed.exitAbs !== null && enterAbs < lastClosed.exitAbs) {
-                enterAbs = lastClosed.exitAbs;
-              }
-              enterAbs = Math.min(enterAbs, detAbsMins);
-              rawIntervals.push({ enterAbs, exitAbs: detAbsMins });
+              // Orphan exit (missed the entry) — no matching In log.
+              // Record as a missingIn interval with 0 working time so the supervisor
+              // can see the anomaly highlighted in red rather than a fabricated duration.
+              rawIntervals.push({ enterAbs: detAbsMins, exitAbs: detAbsMins, missingIn: true });
             }
           }
         });
@@ -578,7 +578,7 @@ export default function App() {
             const exitDate = _addDays(dateFrom, exitDayOff);
             const exitStr = _minsToHHMM(exitMinsInDay);
             const crossesMidnight = exitDayOff !== enterDayOff;
-            const diff = Math.max(0, ri.exitAbs - ri.enterAbs);
+            const diff = ri.missingIn ? 0 : Math.max(0, ri.exitAbs - ri.enterAbs);
 
             logsByDate[enterDate].push({
               id: `INT-${Math.random()}`,
@@ -587,7 +587,8 @@ export default function App() {
               exitTime: exitStr,
               exitDate: crossesMidnight ? exitDate : undefined,
               crossesMidnight: crossesMidnight || undefined,
-              durationMinutes: diff
+              durationMinutes: diff,
+              missingIn: ri.missingIn || undefined
             });
           }
         });
@@ -1380,13 +1381,37 @@ export default function App() {
                     {terminalListFiltered.slice(0, terminalVisibleCount).map((d, index) => (
                       <div
                         key={d.id}
-                        className={`flex items-start gap-2 py-1 ${
+                        className={`flex items-start gap-2 py-1.5 ${
                           index === 0 ? "text-[#D4AF37] font-semibold" : "text-zinc-450 text-zinc-400"
                         }`}
                       >
-                        <span className="text-zinc-600">[{d.timestamp}]</span>
+                        {/* Camera snapshot thumbnail */}
+                        {d.eventFrameUrl ? (
+                          <a
+                            href={`/api/aipix/frame?url=${encodeURIComponent(d.eventFrameUrl)}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={`AIPix snapshot — ${d.employeeName}`}
+                            className="shrink-0 mt-0.5"
+                          >
+                            <img
+                              src={`/api/aipix/frame?url=${encodeURIComponent(d.eventFrameUrl)}`}
+                              alt={`${d.employeeName} @ ${d.timestamp}`}
+                              className={`w-9 h-9 rounded object-cover border transition-all hover:scale-110 hover:shadow-lg ${
+                                d.direction === "In" ? "border-emerald-700/70" : "border-rose-700/70"
+                              }`}
+                              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                            />
+                          </a>
+                        ) : (
+                          <div className={`shrink-0 mt-0.5 w-9 h-9 rounded border flex items-center justify-center text-[8px] ${
+                            d.direction === "In" ? "border-emerald-900/60 text-emerald-900" : "border-rose-900/60 text-rose-900"
+                          }`}>
+                            {d.direction === "In" ? "📥" : "📤"}
+                          </div>
+                        )}
                         <span>
-                          {d.direction === "In" ? "📥" : "📤"}{" "}
+                          <span className="text-zinc-600">[{d.timestamp}]</span>{" "}
                           <strong className={index === 0 ? "text-zinc-100" : "text-zinc-300"}>{d.employeeName}</strong>{" "}
                           {d.direction === "In" ? "entered" : "exited"}{" "}
                           <span className="text-zinc-500">{d.cameraName}</span> (Conf: {d.confidence}%)

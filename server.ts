@@ -172,6 +172,42 @@ async function startServer() {
     }
   });
 
+  // Proxy endpoint to serve AIPix camera snapshot images (event_frame_url)
+  // Fetches the image server-side with the Bearer token and streams it to the browser.
+  app.get("/api/aipix/frame", async (req, res) => {
+    try {
+      const { url } = req.query;
+      if (!url || typeof url !== "string") {
+        return res.status(400).json({ error: "Missing url parameter" });
+      }
+
+      // Only allow AIPix domain images
+      if (!url.startsWith("https://aipix.gsd-me.com/")) {
+        return res.status(403).json({ error: "Forbidden origin" });
+      }
+
+      const token = process.env.AIPIX_BEARER_TOKEN ||
+        "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiNDczZWE4ZTMzMDcxNDczOTFiNDQwYTVjOWYxZThhNjhhNWNmNzAzMTRlN2QyNGY2YjQwZWFkNWU3MmNjM2MyZGVmZjJlZDVlYWMwMzQyNTMiLCJpYXQiOjE3ODM5MTI1MTguMjk5NzgzLCJuYmYiOjE3ODM5MTI1MTguMjk5Nzg4LCJleHAiOjMzMzcyMzU3MzE4LjI2Njk2NCwic3ViIjoiNiIsInNjb3BlcyI6W119.FGjfr73PckImAsYIam3e8l_SSjwuZr3PPT9QYdNOI3hr09M2twPppWFtyaPI5Fz65Zbyrr5AXHR_XY_bXBWtPwdz6ew8yca_sppbYZ7OthVPcLrTPgZyqsI-H7sGc_cQMER8PuN9eVD97Q-_qe0tvXOnEjb-i3c99om_DHKUn1TwH2ftXzhR3om4LVvFysIh3s8Sj8ApQXIaPyh5Xdk7KP0AzrsA8oO1UIKeK7eNzMJpy7hhUqBwe-xwsHa3sHni-jw4WrRp4WhwVIJaq-viAnrxpdTZrQ0EuQXuqWalmnVllvNEB2j9KYYAn6t41Dvuurz0r47bApIU-MG3ULDTYY1dLZiSGJuycl4VkznVtq0Z1ugwMX1nf65tsSHWg7coB8YE9xgdvhyvds5SXqw0axUDudTRWkS9SrNin_RIXpCeKBu-mX6YBGISS5NjkWFgUR_CFCGMsXcuiHCMYJ2O5loGqYwhxcDhkv2SmQ9hMGt9PQPt3BzADpVbLyyKJUTZnulrOegG1QKzhiPhhqS2_CvHBsjuUjoBBGraQAyQG937yL9_iGpo7LmfSMKWE6B2cacXVSfCLEtCw_aPo2fmBSm56k3g3TpeQI44ZevrtdfBEO7vykr8ldbXHv7PE8RqGKU-nRajm7mZ2uctSKvIOHeTNCKgNgYkFmw20N5jq2U";
+
+      const imgRes = await fetch(url, {
+        headers: { "Authorization": `Bearer ${token}`, "Accept": "image/*" }
+      });
+
+      if (!imgRes.ok) {
+        return res.status(imgRes.status).json({ error: "Image fetch failed" });
+      }
+
+      const contentType = imgRes.headers.get("content-type") || "image/jpeg";
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Cache-Control", "public, max-age=86400"); // cache 24h — images are immutable
+      const buffer = await imgRes.arrayBuffer();
+      return res.send(Buffer.from(buffer));
+    } catch (error: any) {
+      console.error("[AIPix Frame Proxy] Error:", error);
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
