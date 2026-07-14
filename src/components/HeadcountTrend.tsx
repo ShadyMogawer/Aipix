@@ -16,7 +16,7 @@ import {
 } from "recharts";
 import { TrendingUp, Users, Activity, Clock, ShieldCheck, Eye } from "lucide-react";
 import { AttendanceLog, CameraDetection, OfficeLocation } from "../types";
-import { timeToMinutes, isIntervalActiveAtTime } from "../data/mockData";
+import { timeToMinutes } from "../data/mockData";
 import { motion } from "motion/react";
 
 interface HeadcountTrendProps {
@@ -64,20 +64,38 @@ export default function HeadcountTrend({
         ? logs.filter((log) => log.locationId === selectedLocationId)
         : logs;
 
-      // Group by employee to prevent double-counting the same employee across multiple log entries
+      // Group by employee to prevent double-counting across multiple log entries
       const insideEmployees = new Set<string>();
-
-      // Build a synthetic "time string" for the top of this hour so we can reuse isIntervalActiveAtTime
-      // (hourStr is already in "HH:00" format — use it directly)
 
       targetLogs.forEach((log) => {
         log.intervals.forEach((interval) => {
           // Skip missingIn orphan intervals — they have no enterTime and no duration
           if (interval.missingIn) return;
 
-          // Use the same function as DashboardStats to ensure chart & headline always agree
-          if (isIntervalActiveAtTime(interval.enterTime, interval.exitTime, hourStr)) {
-            insideEmployees.add(log.employeeId);
+          const enterM = timeToMinutes(interval.enterTime);
+          const hourM  = h * 60; // minutes since midnight for this hour bucket
+
+          if (interval.exitTime) {
+            const exitM = timeToMinutes(interval.exitTime);
+            if (exitM >= enterM) {
+              // Normal same-day interval: inside if hourM is between enter and exit
+              if (hourM >= enterM && hourM <= exitM) {
+                insideEmployees.add(log.employeeId);
+              }
+            } else {
+              // Cross-midnight (night shift): inside if after enter OR before exit
+              if (hourM >= enterM || hourM <= exitM) {
+                insideEmployees.add(log.employeeId);
+              }
+            }
+          } else {
+            // Open interval (employee still inside, no exit recorded yet).
+            // ONLY count them as inside from their enterTime onwards —
+            // do NOT use the night-shift fallback here, which would wrongly
+            // mark them as present at 00:00–07:59 before they even arrived.
+            if (hourM >= enterM) {
+              insideEmployees.add(log.employeeId);
+            }
           }
         });
       });
