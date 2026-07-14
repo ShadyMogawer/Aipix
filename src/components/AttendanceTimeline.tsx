@@ -127,13 +127,16 @@ export default function AttendanceTimeline({
             const empLog = logs.find((l) => l.employeeId === emp.id);
             const intervals = empLog?.intervals || [];
 
+            // Only consider valid (non-missingIn) intervals for all calculations
+            const validIntervals = intervals.filter(iv => !iv.missingIn);
+
             // Determine current presence status based on simulated time
-            const isInside = intervals.some((interval) => {
+            const isInside = validIntervals.some((interval) => {
               return isIntervalActiveAtTime(interval.enterTime, interval.exitTime, simulatedTime);
             });
 
-            // Calculate active cumulative minutes
-            const logTotalMinutes = intervals.reduce((accum, interval) => {
+            // Calculate active cumulative minutes (skip missingIn — they have 0 valid duration)
+            const logTotalMinutes = validIntervals.reduce((accum, interval) => {
               return accum + getIntervalDuration(interval.enterTime, interval.exitTime, simulatedTime);
             }, 0);
 
@@ -190,8 +193,9 @@ export default function AttendanceTimeline({
                   </div>
 
                   {/* Render presence interval blocks */}
-                  {intervals.flatMap((interval) => {
+                  {validIntervals.flatMap((interval) => {
                     const enterMins = timeToMinutes(interval.enterTime);
+                    // Cap open intervals at simulatedTime — don't draw into the future
                     const exitMins = interval.exitTime
                       ? timeToMinutes(interval.exitTime)
                       : timeToMinutes(simulatedTime);
