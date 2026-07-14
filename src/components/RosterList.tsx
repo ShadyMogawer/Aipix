@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useMemo } from "react";
-import { Users, UserCheck, UserX, Calendar, ChevronDown, ChevronUp, Plus, Trash2, Clock, Search, ExternalLink, FileText, Moon, AlertCircle } from "lucide-react";
+import { Users, UserCheck, UserX, Calendar, ChevronDown, ChevronUp, Trash2, Clock, Search, ExternalLink, FileText, Moon, AlertCircle } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Employee, AttendanceLog, OfficeLocation } from "../types";
 import {
@@ -70,10 +70,6 @@ export default function RosterList({
   onViewStaffDetails,
 }: RosterListProps) {
   const [expandedEmpId, setExpandedEmpId] = useState<string | null>(null);
-  const [newEnter, setNewEnter] = useState<string>("09:00");
-  const [newExit, setNewExit] = useState<string>("17:00");
-  const [selectedLoc, setSelectedLoc] = useState<string>(locations[0]?.id || "");
-  const [isCurrentlyActive, setIsCurrentlyActive] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>("");
 
   // Resolve effective date range
@@ -89,13 +85,6 @@ export default function RosterList({
 
   const toggleExpand = (id: string) => {
     setExpandedEmpId(expandedEmpId === id ? null : id);
-  };
-
-  const handleManualAdd = (empId: string) => {
-    onAddInterval(empId, selectedLoc, newEnter, isCurrentlyActive ? null : newExit);
-    setNewEnter("09:00");
-    setNewExit("17:00");
-    setIsCurrentlyActive(false);
   };
 
   // ── Per-employee helpers ──────────────────────────────────────────────────
@@ -688,82 +677,6 @@ export default function RosterList({
                               ))}
                           </div>
                         )}
-                      </div>
-
-                      {/* ── Manual Adjustment Form ───────────────────────────────────── */}
-                      <div className="mt-1 pt-3.5 border-t border-zinc-800">
-                        <h5 className="text-[11px] font-bold text-zinc-500 font-mono uppercase tracking-wider mb-3.5">
-                          Manual Camera Adjustment (AIPix Bypass Override)
-                        </h5>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 bg-zinc-900 p-4 rounded-xl border border-zinc-800 shadow-3xs">
-                          <div>
-                            <label className="block text-[10px] font-semibold text-zinc-400 mb-1 font-mono">
-                              BTC Hub Location
-                            </label>
-                            <select
-                              className="w-full bg-zinc-950 text-zinc-200 border border-zinc-800 rounded-lg py-1.5 px-2.5 text-xs focus:ring-1 focus:ring-[#A9853B] focus:border-[#A9853B]"
-                              value={selectedLoc}
-                              onChange={(e) => setSelectedLoc(e.target.value)}
-                            >
-                              {locations.map((loc) => (
-                                <option key={loc.id} value={loc.id} className="bg-zinc-950 text-zinc-200">
-                                  {loc.code}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-
-                          <div>
-                            <label className="block text-[10px] font-semibold text-zinc-400 mb-1 font-mono">
-                              Enter Time (HH:MM)
-                            </label>
-                            <input
-                              type="text"
-                              placeholder="e.g. 14:30"
-                              value={newEnter}
-                              onChange={(e) => setNewEnter(e.target.value)}
-                              className="w-full bg-zinc-950 text-[#eae6dd] border border-zinc-800 rounded-lg py-1.5 px-2.5 text-xs font-mono focus:ring-1 focus:ring-[#A9853B] focus:border-[#A9853B]"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="block text-[10px] font-semibold text-zinc-400 mb-1 font-mono">
-                              Exit Time (HH:MM)
-                            </label>
-                            <input
-                              type="text"
-                              placeholder="e.g. 15:00"
-                              disabled={isCurrentlyActive}
-                              value={newExit}
-                              onChange={(e) => setNewExit(e.target.value)}
-                              className={`w-full bg-zinc-950 text-[#eae6dd] border border-zinc-800 rounded-lg py-1.5 px-2.5 text-xs font-mono focus:ring-1 focus:ring-[#A9853B] focus:border-[#A9853B] ${isCurrentlyActive ? "opacity-50 cursor-not-allowed" : ""}`}
-                            />
-                          </div>
-
-                          <div className="flex flex-col justify-end">
-                            <button
-                              onClick={() => handleManualAdd(emp.id)}
-                              className="w-full bg-gradient-to-r from-[#D4AF37] to-[#A9853B] text-zinc-950 font-bold py-1.5 px-3 rounded-lg text-xs flex justify-center items-center gap-1.5 transition-all shadow-md cursor-pointer hover:brightness-110 active:scale-95"
-                            >
-                              <Plus className="w-3.5 h-3.5 text-zinc-950" /> Adjust Log
-                            </button>
-                          </div>
-
-                          <div className="sm:col-span-4 mt-2">
-                            <label className="inline-flex items-center gap-1.5 cursor-pointer select-none">
-                              <input
-                                type="checkbox"
-                                checked={isCurrentlyActive}
-                                onChange={(e) => setIsCurrentlyActive(e.target.checked)}
-                                className="bg-zinc-950 border-zinc-800 rounded text-[#A9853B] focus:ring-0 focus:border-[#A9853B]"
-                              />
-                              <span className="text-[10.5px] font-mono text-zinc-400 font-semibold">
-                                Subject is still inside secure vault perimeter (No departure checkout timestamp)
-                              </span>
-                            </label>
-                          </div>
-                        </div>
                       </div>
                     </div>
                   )}
