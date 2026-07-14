@@ -301,6 +301,9 @@ export default function LocationSummary({
       "18:00",
     ];
 
+    // Cap open intervals at current simulated time — future hours must show 0
+    const simMins = timeToMinutes(simulatedTime);
+
     return hours.map((hourStr) => {
       const hourM = timeToMinutes(hourStr);
       const locLogs = logs.filter((log) => log.locationId === selectedLocationId);
@@ -325,9 +328,9 @@ export default function LocationSummary({
               if (hourM >= enterM || hourM <= exitM) presentSet.add(log.employeeId);
             }
           } else {
-            // Open interval: employee entered and hasn't left yet.
-            // Only count from their enterTime onwards — no night-shift fallback.
-            if (hourM >= enterM) presentSet.add(log.employeeId);
+            // Open interval: count from enterTime up to current simulated time only.
+            // Future hours (hourM > simMins) show 0 — we can't know they'll still be there.
+            if (hourM >= enterM && hourM <= simMins) presentSet.add(log.employeeId);
           }
         });
       });

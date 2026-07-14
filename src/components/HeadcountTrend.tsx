@@ -48,8 +48,12 @@ export default function HeadcountTrend({
       ? Array.from({ length: 24 }, (_, i) => i) // 0 to 23
       : Array.from({ length: 15 }, (_, i) => i + 7); // 7:00 AM to 9:00 PM (15 hours)
 
+    // Current simulated time in minutes — used to cap future hours for open intervals
+    const simMins = timeToMinutes(simulatedTime);
+
     return hours.map((h) => {
       const hourStr = `${String(h).padStart(2, "0")}:00`;
+      const hourM   = h * 60; // minutes since midnight for this hour bucket
       
       // Formatting visual label (e.g. 8 AM, 12 PM, 6 PM)
       let hourLabel = "";
@@ -59,7 +63,6 @@ export default function HeadcountTrend({
       else hourLabel = `${h} AM`;
 
       // 1. Calculate Occupancy headcount at the top of this hour
-      let occupancyCount = 0;
       const targetLogs = viewScope === "selected"
         ? logs.filter((log) => log.locationId === selectedLocationId)
         : logs;
@@ -73,7 +76,6 @@ export default function HeadcountTrend({
           if (interval.missingIn) return;
 
           const enterM = timeToMinutes(interval.enterTime);
-          const hourM  = h * 60; // minutes since midnight for this hour bucket
 
           if (interval.exitTime) {
             const exitM = timeToMinutes(interval.exitTime);
@@ -90,16 +92,16 @@ export default function HeadcountTrend({
             }
           } else {
             // Open interval (employee still inside, no exit recorded yet).
-            // ONLY count them as inside from their enterTime onwards —
-            // do NOT use the night-shift fallback here, which would wrongly
-            // mark them as present at 00:00–07:59 before they even arrived.
-            if (hourM >= enterM) {
+            // Count them from enterTime up to — but NOT beyond — the current
+            // simulated time. Future hours (hourM > simMins) must show 0 because
+            // we have no evidence the employee is still there in the future.
+            if (hourM >= enterM && hourM <= simMins) {
               insideEmployees.add(log.employeeId);
             }
           }
         });
       });
-      occupancyCount = insideEmployees.size;
+      const occupancyCount = insideEmployees.size;
 
       // 2. Calculate Detections (camera traffic) within the hour window (h:00 to h:59)
       const targetDetections = viewScope === "selected"
