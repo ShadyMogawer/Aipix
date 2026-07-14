@@ -16,7 +16,7 @@ import {
 } from "recharts";
 import { TrendingUp, Users, Activity, Clock, ShieldCheck, Eye } from "lucide-react";
 import { AttendanceLog, CameraDetection, OfficeLocation } from "../types";
-import { timeToMinutes } from "../data/mockData";
+import { timeToMinutes, isIntervalActiveAtTime } from "../data/mockData";
 import { motion } from "motion/react";
 
 interface HeadcountTrendProps {
@@ -49,7 +49,6 @@ export default function HeadcountTrend({
       : Array.from({ length: 15 }, (_, i) => i + 7); // 7:00 AM to 9:00 PM (15 hours)
 
     return hours.map((h) => {
-      const hourMinutes = h * 60;
       const hourStr = `${String(h).padStart(2, "0")}:00`;
       
       // Formatting visual label (e.g. 8 AM, 12 PM, 6 PM)
@@ -65,18 +64,19 @@ export default function HeadcountTrend({
         ? logs.filter((log) => log.locationId === selectedLocationId)
         : logs;
 
-      // Group by employee to prevent double counting the same employee if they have overlapping data
+      // Group by employee to prevent double-counting the same employee across multiple log entries
       const insideEmployees = new Set<string>();
+
+      // Build a synthetic "time string" for the top of this hour so we can reuse isIntervalActiveAtTime
+      // (hourStr is already in "HH:00" format — use it directly)
 
       targetLogs.forEach((log) => {
         log.intervals.forEach((interval) => {
-          const enterM = timeToMinutes(interval.enterTime);
-          const exitM = interval.exitTime
-            ? timeToMinutes(interval.exitTime)
-            : timeToMinutes(simulatedTime);
+          // Skip missingIn orphan intervals — they have no enterTime and no duration
+          if (interval.missingIn) return;
 
-          // Employee is considered "inside" at this top-of-hour point
-          if (hourMinutes >= enterM && hourMinutes <= exitM) {
+          // Use the same function as DashboardStats to ensure chart & headline always agree
+          if (isIntervalActiveAtTime(interval.enterTime, interval.exitTime, hourStr)) {
             insideEmployees.add(log.employeeId);
           }
         });
