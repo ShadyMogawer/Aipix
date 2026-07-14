@@ -244,13 +244,24 @@ export default function LocationSummary({
       }, 0);
 
       // Active personnel there right now based on simulated time
+      const simMins = timeToMinutes(simulatedTime);
       const currentActiveCount = locLogs.reduce((count, log) => {
-        const simMins = timeToMinutes(simulatedTime);
         const isInside = log.intervals.some((interval) => {
+          // Skip orphan missingIn intervals — they have no valid enterTime
+          if (interval.missingIn) return false;
           const enterMins = timeToMinutes(interval.enterTime);
-          if (enterMins > simMins) return false;
-          if (interval.exitTime === null) return true;
-          return timeToMinutes(interval.exitTime) > simMins;
+          if (interval.exitTime === null) {
+            // Open interval: inside if entered before or at simulated time
+            return enterMins <= simMins;
+          }
+          const exitMins = timeToMinutes(interval.exitTime);
+          if (exitMins >= enterMins) {
+            // Normal same-day: inside if simMins between enter and exit
+            return simMins >= enterMins && simMins <= exitMins;
+          } else {
+            // Cross-midnight: inside if after enter OR before exit
+            return simMins >= enterMins || simMins <= exitMins;
+          }
         });
         return isInside ? count + 1 : count;
       }, 0);
@@ -291,28 +302,39 @@ export default function LocationSummary({
     ];
 
     return hours.map((hourStr) => {
-      const targetMins = timeToMinutes(hourStr);
+      const hourM = timeToMinutes(hourStr);
       const locLogs = logs.filter((log) => log.locationId === selectedLocationId);
 
-      // Count many employees were inside during this general hour block
-      // Active if there's any interval where enterTime <= hourStr and exitTime >= hourStr (or exitTime === null)
-      const occupantsCount = locLogs.reduce((count, log) => {
-        const isPresentAtHour = log.intervals.some((interval) => {
-          const enter = timeToMinutes(interval.enterTime);
-          const exit = interval.exitTime
-            ? timeToMinutes(interval.exitTime)
-            : timeToMinutes(simulatedTime);
+      // Use per-employee dedup set to prevent double-counting
+      const presentSet = new Set<string>();
 
-          // If the interval envelopes or touches the hour
-          return enter <= targetMins && exit >= targetMins;
+      locLogs.forEach((log) => {
+        log.intervals.forEach((interval) => {
+          // Skip missingIn orphan intervals — they have no valid enterTime
+          if (interval.missingIn) return;
+
+          const enterM = timeToMinutes(interval.enterTime);
+
+          if (interval.exitTime) {
+            const exitM = timeToMinutes(interval.exitTime);
+            if (exitM >= enterM) {
+              // Normal same-day interval
+              if (hourM >= enterM && hourM <= exitM) presentSet.add(log.employeeId);
+            } else {
+              // Cross-midnight night shift
+              if (hourM >= enterM || hourM <= exitM) presentSet.add(log.employeeId);
+            }
+          } else {
+            // Open interval: employee entered and hasn't left yet.
+            // Only count from their enterTime onwards — no night-shift fallback.
+            if (hourM >= enterM) presentSet.add(log.employeeId);
+          }
         });
-
-        return isPresentAtHour ? count + 1 : count;
-      }, 0);
+      });
 
       return {
         hour: hourStr,
-        headcount: occupantsCount,
+        headcount: presentSet.size,
       };
     });
   }, [logs, selectedLocationId, simulatedTime]);
