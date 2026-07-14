@@ -287,19 +287,10 @@ export default function LocationSummary({
 
   // Generate dynamic hourly headcount for Recharts visualization
   const hourlyHeadcountData = useMemo(() => {
-    const hours = [
-      "08:00",
-      "09:00",
-      "10:00",
-      "11:00",
-      "12:00",
-      "13:00",
-      "14:00",
-      "15:00",
-      "16:00",
-      "17:00",
-      "18:00",
-    ];
+    // Full 24-hour range: 00:00 → 23:00
+    const hours = Array.from({ length: 24 }, (_, i) =>
+      `${String(i).padStart(2, "0")}:00`
+    );
 
     // Cap open intervals at current simulated time — future hours must show 0
     const simMins = timeToMinutes(simulatedTime);
